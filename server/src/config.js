@@ -1,0 +1,28 @@
+const required = ['ADMIN_USER', 'ADMIN_PASS', 'JWT_SECRET', 'PERSONAL_NUMBERS']
+
+for (const key of required) {
+  if (!process.env[key]) {
+    console.error(`Missing required env var: ${key}`)
+    process.exit(1)
+  }
+}
+
+if (process.env.JWT_SECRET.length < 32) {
+  console.error('JWT_SECRET must be at least 32 characters')
+  process.exit(1)
+}
+
+export const config = {
+  port: parseInt(process.env.PORT || '3000', 10),
+  nodeEnv: process.env.NODE_ENV || 'development',
+  dbPath: process.env.DB_PATH || './data/db/wpp.db',
+  waSessionPath: process.env.WA_SESSION_PATH || './data/wa-session',
+  mediaPath: process.env.MEDIA_PATH || './data/media',
+  adminUser: process.env.ADMIN_USER,
+  adminPass: process.env.ADMIN_PASS,
+  jwtSecret: process.env.JWT_SECRET,
+  personalNumbers: process.env.PERSONAL_NUMBERS.split(',').map(n => n.trim()),
+  publicUrl: process.env.PUBLIC_URL || 'http://localhost',
+  rateLimitLogin: parseInt(process.env.RATE_LIMIT_LOGIN || '10', 10),
+  rateLimitSend: parseInt(process.env.RATE_LIMIT_SEND || '60', 10),
+}

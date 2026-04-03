@@ -1,0 +1,16 @@
+services:
+  server:
+    build:
+      target: dev
+    volumes:
+      - ./server/src:/app/src
+    environment:
+      NODE_ENV: development
+
+  ui:
+    build:
+      target: dev
+    volumes:
+      - ./ui/src:/app/src
+    environment:
+      VITE_API_URL: http://localhost:3000
