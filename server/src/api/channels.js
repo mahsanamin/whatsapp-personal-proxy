@@ -23,7 +23,7 @@ export default async function channelRoutes(fastify) {
           'type', m2.type
         ) FROM messages m2 WHERE m2.jid = cm.jid ORDER BY m2.timestamp DESC LIMIT 1) AS last_message
       FROM channel_meta cm
-      WHERE 1=1
+      WHERE (cm.display_name IS NOT NULL OR EXISTS (SELECT 1 FROM messages m3 WHERE m3.jid = cm.jid AND m3.type != 'unknown' AND m3.type != 'reaction'))
     `
     const params = []
 
@@ -42,13 +42,31 @@ export default async function channelRoutes(fastify) {
       params.push(`%${search}%`, `%${search}%`)
     }
 
-    sql += ' ORDER BY cm.priority DESC, cm.jid'
+    sql += ` ORDER BY cm.priority DESC,
+      (SELECT MAX(m4.timestamp) FROM messages m4 WHERE m4.jid = cm.jid) DESC NULLS LAST,
+      cm.display_name, cm.jid`
 
     const rows = db.prepare(sql).all(...params)
-    return rows.map(row => ({
-      ...row,
-      last_message: row.last_message ? JSON.parse(row.last_message) : null,
-    }))
+
+    // Resolve names via LID map for any unnamed channels
+    const resolveName = db.prepare(`
+      SELECT cm2.display_name FROM lid_map lm
+      JOIN channel_meta cm2 ON cm2.jid = lm.pn
+      WHERE lm.lid = ? AND cm2.display_name IS NOT NULL
+    `)
+
+    return rows.map(row => {
+      let displayName = row.display_name
+      if (!displayName && row.jid.endsWith('@lid')) {
+        const resolved = resolveName.get(row.jid)
+        if (resolved?.display_name) displayName = resolved.display_name
+      }
+      return {
+        ...row,
+        display_name: displayName,
+        last_message: row.last_message ? JSON.parse(row.last_message) : null,
+      }
+    })
   })
 
   fastify.get('/channels/:jid', {

@@ -2,7 +2,10 @@ import crypto from 'node:crypto'
 import { db } from '../db/index.js'
 
 export default async function wsRoutes(fastify) {
-  fastify.get('/ws', { websocket: true }, (socket, request) => {
+  fastify.get('/ws', { websocket: true }, (connection, request) => {
+    // @fastify/websocket v8 passes connection object; .socket is the raw WebSocket
+    const ws = connection.socket ?? connection
+
     const { token, session } = request.query
 
     // Authenticate
@@ -22,8 +25,8 @@ export default async function wsRoutes(fastify) {
     }
 
     if (!authenticated) {
-      socket.send(JSON.stringify({ error: 'Unauthorized' }))
-      socket.close()
+      ws.send(JSON.stringify({ error: 'Unauthorized' }))
+      ws.close()
       return
     }
 
@@ -35,33 +38,34 @@ export default async function wsRoutes(fastify) {
 
     const shouldForward = (jid) => {
       if (!subscribedJids && !subscribedTabId) return true
-
       if (subscribedJids && subscribedJids.has(jid)) return true
-
       if (subscribedTabId) {
         const channel = db.prepare('SELECT tab_id FROM channel_meta WHERE jid = ?').get(jid)
         if (channel?.tab_id === subscribedTabId) return true
       }
-
       return false
+    }
+
+    const safeSend = (data) => {
+      if (ws.readyState === 1) ws.send(data)
     }
 
     const onMessage = (data) => {
       if (shouldForward(data.jid)) {
-        socket.send(JSON.stringify({ event: 'message.new', data }))
+        safeSend(JSON.stringify({ event: 'message.new', data }))
       }
     }
 
     const onMessageUpdate = (data) => {
-      socket.send(JSON.stringify({ event: 'message.update', data }))
+      safeSend(JSON.stringify({ event: 'message.update', data }))
     }
 
     const onWaStatus = (data) => {
-      socket.send(JSON.stringify({ event: 'wa.status', data }))
+      safeSend(JSON.stringify({ event: 'wa.status', data }))
     }
 
     const onChannelUpdate = (data) => {
-      socket.send(JSON.stringify({ event: 'channel.update', data }))
+      safeSend(JSON.stringify({ event: 'channel.update', data }))
     }
 
     eventBus.on('message.new', onMessage)
@@ -69,7 +73,7 @@ export default async function wsRoutes(fastify) {
     eventBus.on('wa.status', onWaStatus)
     eventBus.on('channel.update', onChannelUpdate)
 
-    socket.on('message', (raw) => {
+    ws.on('message', (raw) => {
       try {
         const msg = JSON.parse(raw.toString())
 
@@ -82,14 +86,14 @@ export default async function wsRoutes(fastify) {
         }
 
         if (msg.action === 'ping') {
-          socket.send(JSON.stringify({ event: 'pong' }))
+          safeSend(JSON.stringify({ event: 'pong' }))
         }
       } catch (err) {
         // Ignore malformed messages
       }
     })
 
-    socket.on('close', () => {
+    ws.on('close', () => {
       eventBus.off('message.new', onMessage)
       eventBus.off('message.update', onMessageUpdate)
       eventBus.off('wa.status', onWaStatus)

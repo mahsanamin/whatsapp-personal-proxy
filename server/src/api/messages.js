@@ -30,7 +30,27 @@ export default async function messageRoutes(fastify) {
     sql += ' ORDER BY timestamp DESC LIMIT ?'
     params.push(Math.min(parseInt(limit, 10), 200))
 
-    return db.prepare(sql).all(...params)
+    const messages = db.prepare(sql).all(...params)
+
+    // Fetch reactions for these messages
+    const msgIds = messages.filter(m => m.type !== 'reaction').map(m => m.id)
+    const reactions = msgIds.length > 0
+      ? db.prepare(
+          `SELECT body, quoted_id, from_jid FROM messages WHERE type = 'reaction' AND quoted_id IN (${msgIds.map(() => '?').join(',')})`,
+        ).all(...msgIds)
+      : []
+
+    // Group reactions by target message
+    const reactionMap = {}
+    for (const r of reactions) {
+      if (!reactionMap[r.quoted_id]) reactionMap[r.quoted_id] = []
+      reactionMap[r.quoted_id].push({ emoji: r.body, from: r.from_jid })
+    }
+
+    // Attach reactions and filter out standalone reaction messages
+    return messages
+      .filter(m => m.type !== 'reaction')
+      .map(m => ({ ...m, reactions: reactionMap[m.id] || [] }))
   })
 
   // Stream media on demand — does NOT write to disk

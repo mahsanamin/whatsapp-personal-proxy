@@ -6,6 +6,7 @@ body {
   margin: 0;
   background: #0d0d0d;
   color: #e5e5e5;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji';
 }
 
 /* Scrollbar styling */

@@ -26,6 +26,7 @@ const fastify = Fastify({
   logger: {
     level: config.nodeEnv === 'development' ? 'info' : 'warn',
   },
+  trustProxy: true,
 })
 
 // Event bus for WA events → WS broadcast
@@ -45,8 +46,9 @@ await fastify.register(cookie)
 await fastify.register(session, {
   secret: config.jwtSecret,
   cookie: {
-    secure: false, // set true behind HTTPS
+    secure: config.cookieSecure,
     httpOnly: true,
+    sameSite: 'lax',
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
   },
 })
@@ -81,6 +83,51 @@ await fastify.register(messageRoutes)
 await fastify.register(tabRoutes)
 await fastify.register(whitelistRoutes)
 await fastify.register(wsRoutes)
+
+// Force resolve unnamed contacts using Baileys
+fastify.post('/admin/resolve-contacts', {
+  preHandler: requireSession,
+}, async (request, reply) => {
+  const { ensureConnected } = await import('./wa/client.js')
+  const sock = ensureConnected()
+  if (!sock) return reply.code(503).send({ error: 'WhatsApp not connected', code: 'WA_DISCONNECTED' })
+
+  const unnamed = db.prepare(
+    "SELECT jid FROM channel_meta WHERE display_name IS NULL AND EXISTS (SELECT 1 FROM messages m WHERE m.jid = channel_meta.jid AND m.type != 'unknown')"
+  ).all()
+
+  let resolved = 0
+  for (const { jid } of unnamed) {
+    try {
+      if (jid.endsWith('@g.us')) {
+        const meta = await sock.groupMetadata(jid)
+        if (meta?.subject) {
+          db.prepare('UPDATE channel_meta SET display_name = ? WHERE jid = ?').run(meta.subject, jid)
+          resolved++
+        }
+      }
+    } catch (_) {}
+  }
+
+  return { ok: true, checked: unnamed.length, resolved }
+})
+
+// General send — for web UI session (sends to any JID directly)
+fastify.post('/send', {
+  preHandler: requireSession,
+}, async (request, reply) => {
+  const { jid, message } = request.body || {}
+  if (!jid || !message) {
+    return reply.code(400).send({ error: 'Fields "jid" and "message" required', code: 'BAD_INPUT' })
+  }
+  const { ensureConnected } = await import('./wa/client.js')
+  const sock = ensureConnected()
+  if (!sock) {
+    return reply.code(503).send({ error: 'WhatsApp not connected', code: 'WA_DISCONNECTED' })
+  }
+  const result = await sock.sendMessage(jid, { text: message })
+  return { ok: true, messageId: result.key.id }
+})
 
 // LLM summary stub — deferred to Phase 2
 fastify.get('/channels/:jid/summary', {

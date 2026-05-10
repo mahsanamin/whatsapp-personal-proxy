@@ -20,7 +20,6 @@ export default function Tokens() {
   const [copied, setCopied] = useState(false)
 
   const load = () => api('/tokens').then(setTokens).catch(() => {})
-
   useEffect(() => { load() }, [])
 
   const toggleScope = (scope) => {
@@ -35,6 +34,7 @@ export default function Tokens() {
       setNewToken(result.token)
       setName('')
       setScopes([])
+      setShowCreate(false)
       load()
     } catch (_) {}
   }
@@ -51,30 +51,47 @@ export default function Tokens() {
   }
 
   return (
-    <div className="min-h-screen bg-bg p-8">
-      <div className="max-w-3xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-lg font-mono font-semibold text-accent">API Tokens</h1>
-          <div className="flex gap-3">
-            <button onClick={() => { setShowCreate(!showCreate); setNewToken(null) }} className="text-sm font-mono text-accent border border-accent px-3 py-1 hover:bg-accent hover:text-black">
-              {showCreate ? 'Cancel' : '+ New Token'}
-            </button>
-            <Link to="/" className="text-sm font-mono text-neutral-500 border border-border px-3 py-1 hover:text-white">
-              Back
+    <div className="min-h-screen bg-bg">
+      {/* Header */}
+      <div className="border-b border-neutral-800 bg-neutral-900/30">
+        <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Link to="/" className="text-neutral-500 hover:text-white transition-colors">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
             </Link>
+            <h1 className="text-base font-semibold text-neutral-200">API Keys</h1>
           </div>
+          <button
+            onClick={() => { setShowCreate(!showCreate); setNewToken(null) }}
+            className={`text-xs font-medium px-4 py-2 rounded-lg transition-all
+              ${showCreate
+                ? 'bg-neutral-800 text-neutral-400 hover:text-white'
+                : 'bg-accent hover:bg-emerald-400 text-black'
+              }`}
+          >
+            {showCreate ? 'Cancel' : 'Create Key'}
+          </button>
         </div>
+      </div>
 
+      <div className="max-w-4xl mx-auto px-6 py-6">
         {/* New token display */}
         {newToken && (
-          <div className="mb-6 border border-yellow-700 bg-yellow-950 p-4">
-            <p className="text-yellow-400 text-xs font-mono mb-2">This token will not be shown again.</p>
+          <div className="mb-6 bg-yellow-950/30 border border-yellow-900/40 rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <svg className="w-4 h-4 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+              </svg>
+              <span className="text-yellow-400 text-xs font-medium">This key will not be shown again. Copy it now.</span>
+            </div>
             <div className="flex items-center gap-2">
-              <code className="flex-1 bg-bg border border-border px-3 py-2 text-sm font-mono text-white break-all">
+              <code className="flex-1 bg-bg rounded-lg px-4 py-2.5 text-sm font-mono text-white break-all border border-neutral-800">
                 {newToken}
               </code>
-              <button onClick={copyToken} className="text-sm font-mono text-accent border border-accent px-3 py-1 hover:bg-accent hover:text-black">
-                {copied ? 'Copied' : 'Copy'}
+              <button onClick={copyToken} className="bg-accent hover:bg-emerald-400 text-black rounded-lg px-4 py-2.5 text-sm font-medium transition-all flex-shrink-0">
+                {copied ? 'Copied!' : 'Copy'}
               </button>
             </div>
           </div>
@@ -82,32 +99,33 @@ export default function Tokens() {
 
         {/* Create form */}
         {showCreate && (
-          <form onSubmit={create} className="mb-6 border border-border p-4 bg-surface">
-            <label className="block text-xs text-neutral-500 mb-1 font-mono">NAME</label>
+          <form onSubmit={create} className="mb-6 bg-neutral-900/50 border border-neutral-800 rounded-xl p-5">
+            <label className="block text-[11px] text-neutral-500 mb-1.5 font-medium uppercase tracking-wider">Key Name</label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full bg-bg border border-border px-3 py-2 text-sm mb-4 outline-none focus:border-accent"
-              placeholder="e.g. My Bot"
+              className="w-full bg-neutral-800/60 rounded-xl px-4 py-2.5 text-sm text-white placeholder-neutral-600 outline-none focus:ring-1 focus:ring-accent/50 transition-all mb-5"
+              placeholder="e.g. My Bot, Automation Script"
+              autoFocus
             />
 
-            <label className="block text-xs text-neutral-500 mb-2 font-mono">SCOPES</label>
-            <div className="space-y-3 mb-4">
+            <label className="block text-[11px] text-neutral-500 mb-3 font-medium uppercase tracking-wider">Permissions</label>
+            <div className="space-y-4 mb-6">
               {Object.entries(SCOPE_GROUPS).map(([group, groupScopes]) => (
                 <div key={group}>
-                  <span className="text-xs text-neutral-400 font-mono">{group}</span>
-                  <div className="flex flex-wrap gap-2 mt-1">
+                  <span className="text-xs text-neutral-300 font-medium">{group}</span>
+                  <div className="flex flex-wrap gap-2 mt-1.5">
                     {groupScopes.map(scope => (
                       <button
                         key={scope}
                         type="button"
                         onClick={() => toggleScope(scope)}
-                        className={`text-xs font-mono px-2 py-1 border ${
-                          scopes.includes(scope)
-                            ? 'border-accent text-accent bg-emerald-950'
-                            : 'border-border text-neutral-500 hover:text-white'
-                        }`}
+                        className={`text-xs px-3 py-1.5 rounded-lg transition-all
+                          ${scopes.includes(scope)
+                            ? 'bg-accent/20 text-accent border border-accent/40'
+                            : 'bg-neutral-800/60 text-neutral-500 border border-neutral-700 hover:text-white hover:border-neutral-600'
+                          }`}
                       >
                         {scope}
                       </button>
@@ -117,43 +135,53 @@ export default function Tokens() {
               ))}
             </div>
 
-            <button type="submit" className="bg-accent text-black font-mono font-semibold py-2 px-4 text-sm hover:bg-emerald-400">
-              Create Token
+            <button
+              type="submit"
+              disabled={!name || scopes.length === 0}
+              className="bg-accent hover:bg-emerald-400 disabled:opacity-30 text-black font-semibold rounded-xl px-6 py-2.5 text-sm transition-all"
+            >
+              Create API Key
             </button>
           </form>
         )}
 
         {/* Token list */}
-        <div className="border border-border">
-          <div className="grid grid-cols-[1fr_2fr_auto_auto] gap-4 px-4 py-2 bg-surface text-xs font-mono text-neutral-500 border-b border-border">
-            <span>Name</span>
-            <span>Scopes</span>
-            <span>Last Used</span>
-            <span></span>
-          </div>
-          {tokens.length === 0 && (
-            <div className="px-4 py-6 text-center text-neutral-600 text-sm font-mono">No tokens yet</div>
+        <div className="space-y-2">
+          {tokens.length === 0 && !showCreate && (
+            <div className="text-center py-12">
+              <div className="w-12 h-12 rounded-2xl bg-neutral-800/50 flex items-center justify-center mx-auto mb-3">
+                <svg className="w-6 h-6 text-neutral-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                </svg>
+              </div>
+              <p className="text-neutral-500 text-sm">No API keys yet</p>
+              <p className="text-neutral-600 text-xs mt-1">Create one to access WPP from scripts and bots</p>
+            </div>
           )}
           {tokens.map(t => (
-            <div key={t.id} className={`grid grid-cols-[1fr_2fr_auto_auto] gap-4 px-4 py-3 border-b border-border items-center ${t.revoked ? 'opacity-40' : ''}`}>
-              <span className="text-sm">{t.name}</span>
-              <div className="flex flex-wrap gap-1">
+            <div key={t.id} className={`bg-neutral-900/50 border border-neutral-800 rounded-xl p-4 ${t.revoked ? 'opacity-40' : ''}`}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-medium text-neutral-200">{t.name}</span>
+                <div className="flex items-center gap-3">
+                  <span className="text-[11px] text-neutral-600">
+                    {t.last_used ? `Used ${new Date(t.last_used).toLocaleDateString()}` : 'Never used'}
+                  </span>
+                  {!t.revoked ? (
+                    <button onClick={() => revoke(t.id)} className="text-xs text-red-400 hover:text-red-300 transition-colors">
+                      Revoke
+                    </button>
+                  ) : (
+                    <span className="text-xs text-neutral-600">Revoked</span>
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
                 {t.scopes.map(s => (
-                  <span key={s} className="text-xs font-mono bg-neutral-900 border border-border px-1.5 py-0.5">
+                  <span key={s} className="text-[11px] bg-neutral-800/80 text-neutral-400 rounded px-2 py-0.5">
                     {s}
                   </span>
                 ))}
               </div>
-              <span className="text-xs text-neutral-600 font-mono">
-                {t.last_used ? new Date(t.last_used).toLocaleDateString() : 'never'}
-              </span>
-              {!t.revoked ? (
-                <button onClick={() => revoke(t.id)} className="text-xs font-mono text-red-400 hover:text-red-300">
-                  Revoke
-                </button>
-              ) : (
-                <span className="text-xs font-mono text-neutral-600">Revoked</span>
-              )}
             </div>
           ))}
         </div>

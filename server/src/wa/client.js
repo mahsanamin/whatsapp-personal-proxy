@@ -25,10 +25,16 @@ export async function createWAClient(sessionPath, eventBus) {
     version,
     auth: state,
     printQRInTerminal: false,
-    downloadHistory: false,
-    syncFullHistory: false,
+    syncFullHistory: true,
     mediaCache: undefined,
-    getMessage: async () => undefined,
+    getMessage: async (key) => {
+      const msg = db.prepare('SELECT raw_json FROM messages WHERE id = ?').get(key.id)
+      if (msg?.raw_json) {
+        const parsed = JSON.parse(msg.raw_json, BufferJSON.reviver)
+        return parsed.message
+      }
+      return undefined
+    },
     logger: pino({ level: 'warn' }),
   })
 
@@ -43,6 +49,7 @@ export async function createWAClient(sessionPath, eventBus) {
       const QRCode = (await import('qrcode')).default
       const png = await QRCode.toDataURL(qr)
       eventBus.lastQr = png
+      eventBus.qrTimestamp = Date.now()
       eventBus.emit('wa.qr', png)
     }
 
@@ -63,8 +70,23 @@ export async function createWAClient(sessionPath, eventBus) {
           upsert.run(jid, meta.subject)
         }
       } catch (e) {
-        // Non-fatal — channel list will still populate from message history
+        // Non-fatal
       }
+
+      // Resolve group names for unnamed group channels
+      try {
+        const unnamedGroups = db.prepare(
+          "SELECT jid FROM channel_meta WHERE display_name IS NULL AND jid LIKE '%@g.us'"
+        ).all()
+        for (const { jid } of unnamedGroups) {
+          try {
+            const meta = await sock.groupMetadata(jid)
+            if (meta?.subject) {
+              db.prepare('UPDATE channel_meta SET display_name = ? WHERE jid = ?').run(meta.subject, jid)
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
     }
 
     if (connection === 'connecting') {
@@ -97,10 +119,179 @@ export async function createWAClient(sessionPath, eventBus) {
     }
   })
 
+  // ─── Contact name resolution system ────────────────────────────────
+  // WhatsApp uses @lid JIDs for chats but names come with @s.whatsapp.net JIDs.
+  // We maintain a lid_map table to cross-reference, then propagate names.
+
+  const stmts = {
+    upsertChannel: db.prepare(`
+      INSERT INTO channel_meta (jid, display_name) VALUES (?, ?)
+      ON CONFLICT(jid) DO UPDATE SET display_name = COALESCE(excluded.display_name, channel_meta.display_name)
+    `),
+    updateName: db.prepare(`UPDATE channel_meta SET display_name = ? WHERE jid = ? AND display_name IS NULL`),
+    upsertLidMap: db.prepare(`
+      INSERT INTO lid_map (lid, pn) VALUES (?, ?)
+      ON CONFLICT(lid) DO UPDATE SET pn = excluded.pn, updated_at = datetime('now')
+    `),
+    getLidByPn: db.prepare(`SELECT lid FROM lid_map WHERE pn = ?`),
+    getPnByLid: db.prepare(`SELECT pn FROM lid_map WHERE lid = ?`),
+    getNameByJid: db.prepare(`SELECT display_name FROM channel_meta WHERE jid = ?`),
+  }
+
+  // Store a LID-to-PN mapping and propagate any known name
+  function storeLidMapping(lid, pn) {
+    if (!lid?.endsWith('@lid') || !pn?.endsWith('@s.whatsapp.net')) return
+    try {
+      stmts.upsertLidMap.run(lid, pn)
+      // If the PN has a name, copy it to the LID channel
+      const pnRow = stmts.getNameByJid.get(pn)
+      if (pnRow?.display_name) {
+        stmts.updateName.run(pnRow.display_name, lid)
+      }
+      // If the LID has a name but PN doesn't, copy the other way
+      const lidRow = stmts.getNameByJid.get(lid)
+      if (lidRow?.display_name && !pnRow?.display_name) {
+        stmts.updateName.run(lidRow.display_name, pn)
+      }
+    } catch (_) {}
+  }
+
+  // Upsert a contact name, also propagating via LID map
+  function upsertContact(id, name) {
+    if (!id || !name) return
+    try {
+      stmts.upsertChannel.run(id, name)
+      // Propagate name to the other JID format via lid_map
+      if (id.endsWith('@lid')) {
+        const mapping = stmts.getPnByLid.get(id)
+        if (mapping?.pn) stmts.updateName.run(name, mapping.pn)
+      } else if (id.endsWith('@s.whatsapp.net')) {
+        const mapping = stmts.getLidByPn.get(id)
+        if (mapping?.lid) stmts.updateName.run(name, mapping.lid)
+      }
+    } catch (_) {}
+  }
+
+  // Process a contact object from Baileys (contacts.upsert / messaging-history.set)
+  function processContact(contact) {
+    // Address book name takes priority over pushName
+    const name = contact.name || contact.notify || contact.verifiedName
+    if (name && contact.id) upsertContact(contact.id, name)
+    if (name && contact.lid) upsertContact(contact.lid, name)
+    if (name && contact.phoneNumber) upsertContact(contact.phoneNumber, name)
+    // Store LID-PN mapping
+    if (contact.lid && contact.id?.endsWith('@s.whatsapp.net')) {
+      storeLidMapping(contact.lid, contact.id)
+    }
+    if (contact.lid && contact.phoneNumber) {
+      storeLidMapping(contact.lid, contact.phoneNumber)
+    }
+    if (contact.id?.endsWith('@lid') && contact.phoneNumber) {
+      storeLidMapping(contact.id, contact.phoneNumber)
+    }
+  }
+
+  // Extract LID-PN mapping from message keys
+  function extractMappingFromMessage(msg) {
+    const key = msg.key
+    if (!key) return
+    // DM: remoteJid is @lid, remoteJidAlt might be @s.whatsapp.net
+    if (key.remoteJid?.endsWith('@lid') && key.remoteJidAlt?.endsWith('@s.whatsapp.net')) {
+      storeLidMapping(key.remoteJid, key.remoteJidAlt)
+    }
+    // Group: participant is @lid, participantAlt might be @s.whatsapp.net
+    if (key.participant?.endsWith('@lid') && key.participantAlt?.endsWith('@s.whatsapp.net')) {
+      storeLidMapping(key.participant, key.participantAlt)
+    }
+  }
+
+  // ─── Chat sync events ─────────────────────────────────────────────
+  sock.ev.on('chats.upsert', (chats) => {
+    for (const chat of chats) {
+      try {
+        stmts.upsertChannel.run(chat.id, chat.name || null)
+        // Extract LID-PN from chat object
+        if (chat.lidJid && chat.pnJid) storeLidMapping(chat.lidJid, chat.pnJid)
+        if (chat.id?.endsWith('@lid') && chat.pnJid) storeLidMapping(chat.id, chat.pnJid)
+      } catch (_) {}
+    }
+  })
+
+  sock.ev.on('chats.update', (updates) => {
+    for (const chat of updates) {
+      try {
+        if (chat.id) stmts.upsertChannel.run(chat.id, chat.name || null)
+        if (chat.lidJid && chat.pnJid) storeLidMapping(chat.lidJid, chat.pnJid)
+      } catch (_) {}
+    }
+  })
+
+  // ─── Contact sync events ──────────────────────────────────────────
+  sock.ev.on('contacts.upsert', (contacts) => {
+    for (const contact of contacts) processContact(contact)
+  })
+
+  sock.ev.on('contacts.update', (updates) => {
+    for (const contact of updates) processContact(contact)
+  })
+
+  // ─── LID mapping events ───────────────────────────────────────────
+  sock.ev.on('lid-mapping.update', (mappings) => {
+    for (const { lid, pn } of (Array.isArray(mappings) ? mappings : [mappings])) {
+      storeLidMapping(lid, pn)
+    }
+  })
+
+  // ─── History sync ─────────────────────────────────────────────────
+  sock.ev.on('messaging-history.set', ({ messages: msgs, chats, contacts, lidPnMappings }) => {
+    // Process LID-PN mappings FIRST so names can propagate
+    for (const mapping of (lidPnMappings || [])) {
+      storeLidMapping(mapping.lid, mapping.pn)
+    }
+
+    for (const chat of (chats || [])) {
+      try {
+        stmts.upsertChannel.run(chat.id, chat.name || null)
+        if (chat.lidJid && chat.pnJid) storeLidMapping(chat.lidJid, chat.pnJid)
+        if (chat.id?.endsWith('@lid') && chat.pnJid) storeLidMapping(chat.id, chat.pnJid)
+      } catch (_) {}
+    }
+
+    for (const contact of (contacts || [])) processContact(contact)
+
+    for (const msg of (msgs || [])) {
+      try {
+        extractMappingFromMessage(msg)
+        if (msg.pushName && msg.key?.remoteJid) {
+          const contactJid = msg.key.participant || msg.key.remoteJid
+          upsertContact(contactJid, msg.pushName)
+          if (!msg.key.remoteJid.endsWith('@g.us')) {
+            upsertContact(msg.key.remoteJid, msg.pushName)
+          }
+        }
+        const normalized = normalizeMessage(msg)
+        if (!normalized) continue
+        saveMessage(normalized)
+      } catch (_) {}
+    }
+  })
+
   // Message ingestion — text + media stubs, NEVER download
   sock.ev.on('messages.upsert', ({ messages: msgs, type }) => {
     for (const msg of msgs) {
       try {
+        // Extract LID-PN mapping from message keys
+        extractMappingFromMessage(msg)
+
+        // Extract pushName to resolve contact names
+        if (msg.pushName && msg.key?.remoteJid) {
+          const contactJid = msg.key.participant || msg.key.remoteJid
+          upsertContact(contactJid, msg.pushName)
+          if (!msg.key.remoteJid.endsWith('@g.us')) {
+            upsertContact(msg.key.remoteJid, msg.pushName)
+          }
+        }
+
         const normalized = normalizeMessage(msg)
         if (!normalized) continue
         saveMessage(normalized)
@@ -132,9 +323,21 @@ function normalizeMessage(raw) {
   const jid = key.remoteJid
   const fromJid = key.participant || key.remoteJid
 
+  // Skip status broadcasts
+  if (jid === 'status@broadcast') return null
+
   // Determine type and extract text
   const msg = raw.message
   if (!msg) return null
+
+  // Skip protocol/system messages (security notifications, app state sync, etc.)
+  if (msg.protocolMessage || msg.senderKeyDistributionMessage || msg.messageContextInfo) {
+    // If it's ONLY these keys with no actual content, skip
+    const contentKeys = Object.keys(msg).filter(k =>
+      k !== 'protocolMessage' && k !== 'senderKeyDistributionMessage' && k !== 'messageContextInfo'
+    )
+    if (contentKeys.length === 0) return null
+  }
 
   let body = null
   let type = 'text'
@@ -188,12 +391,13 @@ function normalizeMessage(raw) {
   } else if (msg.reactionMessage) {
     type = 'reaction'
     body = msg.reactionMessage.text
+    // reactionMessage target stored below in quotedId
   } else {
     // Unknown message type — store raw but no body
     type = 'unknown'
   }
 
-  const quotedId = msg.extendedTextMessage?.contextInfo?.stanzaId || null
+  const quotedId = msg.reactionMessage?.key?.id || msg.extendedTextMessage?.contextInfo?.stanzaId || null
   const timestamp = typeof raw.messageTimestamp === 'number'
     ? new Date(raw.messageTimestamp * 1000).toISOString()
     : new Date().toISOString()
@@ -253,6 +457,11 @@ export function ensureConnected() {
   if (!currentSock?.user) return null
   return currentSock
 }
+
+export function resetRetries() {
+  retries = 0
+}
+
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {

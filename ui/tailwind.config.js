@@ -11,6 +11,7 @@ export default {
       },
       fontFamily: {
         mono: ['JetBrains Mono', 'monospace'],
+        sans: ['system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif', 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji'],
       },
     },
   },

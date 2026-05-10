@@ -60,5 +60,13 @@ export function runMigrations(db) {
 
     CREATE INDEX IF NOT EXISTS idx_messages_jid_ts ON messages(jid, timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_messages_type   ON messages(type);
+
+    -- LID to phone number mapping (WhatsApp multi-device uses LID for chats, PN for contacts)
+    CREATE TABLE IF NOT EXISTS lid_map (
+      lid         TEXT PRIMARY KEY,
+      pn          TEXT NOT NULL,
+      updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_lid_map_pn ON lid_map(pn);
   `)
 }

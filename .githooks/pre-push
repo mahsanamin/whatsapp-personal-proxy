@@ -1,0 +1,68 @@
+#!/bin/bash
+# Pre-push hook: verify builds, lock files, and security before pushing.
+# Install once with: git config core.hooksPath .githooks
+set -e
+
+echo "=== Pre-push checks ==="
+
+FAILED=0
+
+run() {
+  local label="$1"; shift
+  printf '  %-44s ' "$label"
+  if "$@" > /dev/null 2>&1; then
+    echo "OK"
+  else
+    echo "FAILED"
+    echo "    Reproduce: $*"
+    FAILED=1
+  fi
+}
+
+# 1. Server: syntax check (no build step, ESM Node)
+run "Server syntax check" \
+  bash -c 'find server/src -name "*.js" -print0 | xargs -0 -n1 node --check'
+
+# 2. UI: vite build
+run "UI build (vite)" \
+  bash -c 'cd ui && npx --no-install vite build --mode production'
+
+# 3. CLI: syntax check
+run "CLI syntax check" \
+  bash -c 'find cli/src -name "*.js" -print0 | xargs -0 -n1 node --check'
+
+# 4–6. npm audit per package — high+ severity blocks
+for pkg in server ui cli; do
+  run "$pkg: npm audit (high+)" \
+    bash -c "cd $pkg && npm audit --audit-level=high"
+done
+
+# 7–9. Lock-file integrity
+for pkg in server ui cli; do
+  run "$pkg: lock file in sync" \
+    bash -c "cd $pkg && npm ls"
+done
+
+# 10. Secret sweep — refuse to push if recognizable personal/private
+# strings have crept back in (Tailscale hostnames, work email, etc.).
+# Tune SECRET_PATTERNS as the project evolves.
+SECRET_PATTERNS='ahsans-wego-mac-mini|tail[a-z0-9]{6,}\.ts\.net|@wego\.com|ahsan\.amin|923001234567|923007654321'
+printf '  %-44s ' "Secret sweep"
+HITS=$(git grep -nE "$SECRET_PATTERNS" -- ':!.githooks/pre-push' ':!CHANGELOG.md' 2>/dev/null || true)
+if [ -z "$HITS" ]; then
+  echo "OK"
+else
+  echo "LEAKS FOUND"
+  echo "$HITS" | sed 's/^/    /'
+  FAILED=1
+fi
+
+echo ""
+if [ "$FAILED" -eq 1 ]; then
+  echo "=== Pre-push checks FAILED — push blocked ==="
+  echo "Fix the issues above and try again."
+  echo "Bypass (use sparingly): git push --no-verify"
+  exit 1
+fi
+
+echo "=== All checks passed ==="

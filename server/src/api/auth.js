@@ -32,10 +32,27 @@ export default async function authRoutes(fastify) {
 
   fastify.get('/auth/wa/status', async () => {
     const eventBus = fastify.eventBus
+    const qrAge = eventBus.qrTimestamp ? Math.floor((Date.now() - eventBus.qrTimestamp) / 1000) : null
+    // QR codes expire after ~20s on WhatsApp servers — mark stale ones
+    const qrFresh = qrAge !== null && qrAge < 25
     return {
       status: eventBus.waStatus || 'close',
-      qr: eventBus.lastQr || null,
+      qr: qrFresh ? eventBus.lastQr : null,
+      qr_age: qrAge,
     }
+  })
+
+  // Force fresh QR generation — resets retries and reconnects
+  fastify.post('/auth/wa/refresh-qr', {
+    preHandler: fastify.requireSession,
+  }, async () => {
+    const { createWAClient, resetRetries } = await import('../wa/client.js')
+    resetRetries()
+    const eventBus = fastify.eventBus
+    eventBus.lastQr = null
+    eventBus.qrTimestamp = null
+    createWAClient(config.waSessionPath, eventBus)
+    return { ok: true, message: 'Generating fresh QR code...' }
   })
 
   fastify.get('/auth/wa/qr', (request, reply) => {
@@ -84,7 +101,8 @@ export default async function authRoutes(fastify) {
   fastify.post('/auth/wa/reconnect', {
     preHandler: fastify.requireSession,
   }, async () => {
-    const { createWAClient } = await import('../wa/client.js')
+    const { createWAClient, resetRetries } = await import('../wa/client.js')
+    resetRetries()
     createWAClient(config.waSessionPath, fastify.eventBus)
     return { ok: true, message: 'Reconnecting...' }
   })

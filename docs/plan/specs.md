@@ -228,7 +228,7 @@ JWT_SECRET=replace_with_random_secret
 
 # Your personal numbers (bypass whitelist, always allowed)
 # Comma-separated E.164 format
-PERSONAL_NUMBERS=+923001234567,+923007654321
+PERSONAL_NUMBERS=+15555550100,+15555550101
 
 # Public URL for CLI config and QR callback
 PUBLIC_URL=http://localhost
@@ -585,7 +585,7 @@ wa:admin
 ```
 POST /personal/send
   Auth: Bearer token OR session
-  Body: { to: "+923001234567", message: "text" }
+  Body: { to: "+15555550100", message: "text" }
   Validation: `to` must be in PERSONAL_NUMBERS env var (E.164)
   Response: { ok: true, messageId: "..." }
 ```
@@ -714,7 +714,7 @@ GET /health
 
 ```jsonc
 // Subscribe to specific JIDs only (filter noise)
-{ "action": "subscribe", "jids": ["120363...@g.us", "923001234567@s.whatsapp.net"] }
+{ "action": "subscribe", "jids": ["120363...@g.us", "15555550100@s.whatsapp.net"] }
 
 // Subscribe to a whole tab
 { "action": "subscribe_tab", "tab_id": "tab_abc123" }
@@ -1128,7 +1128,7 @@ Phase 1 is complete when:
 9. `curl -H "Authorization: Bearer sk_..." -X POST /personal/send ...` works
 10. `curl` with wrong scope returns 403
 11. `wpp status` shows WA connected
-12. `wpp send personal +923001234567 "test"` sends a message
+12. `wpp send personal +15555550100 "test"` sends a message
 13. `wpp watch` streams incoming messages in real time
 14. A new incoming WA message appears in the Web UI without page refresh
 15. A media message shows a placeholder card, not a downloaded file

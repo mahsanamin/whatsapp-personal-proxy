@@ -24,8 +24,10 @@ make up      # docker compose up -d --build
 - API tokens: SHA-256 hashed, `sk_` prefix, shown once on creation
 - Admin password: constant-time comparison via `crypto.timingSafeEqual`
 - Media: NEVER auto-downloaded. Metadata stored, files fetched on explicit request only
-- Baileys: no store, no history sync, `BufferJSON.replacer` for all serialization
+- Baileys: no store; `syncFullHistory: true` so contact names + history populate; `BufferJSON.replacer` for all serialization
+- LID/PN duality: WhatsApp multi-device uses `@lid` JIDs for chats and `@s.whatsapp.net` for contacts. `lid_map` cross-references them so display names propagate
 - Error format: `{ error: "message", code: "MACHINE_CODE" }`
+- TLS terminates at the edge (host nginx / Tailscale Serve). The Node app speaks plain HTTP; it relies on `trustProxy: true` and `X-Forwarded-Proto` to set secure-cookie flags correctly
 
 ## Auth Model
 

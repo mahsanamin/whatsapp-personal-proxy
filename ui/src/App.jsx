@@ -10,10 +10,17 @@ export default function App() {
   const [authed, setAuthed] = useState(null) // null = loading
 
   useEffect(() => {
-    api('/auth/wa/status')
+    api('/tokens')
       .then(() => setAuthed(true))
       .catch(() => setAuthed(false))
   }, [])
+
+  const handleLogin = () => setAuthed(true)
+
+  const handleLogout = () => {
+    api('/auth/logout', { method: 'POST' }).catch(() => {})
+    setAuthed(false)
+  }
 
   if (authed === null) {
     return (
@@ -26,10 +33,10 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/login" element={authed ? <Navigate to="/" /> : <Login onLogin={() => setAuthed(true)} />} />
+        <Route path="/login" element={authed ? <Navigate to="/" /> : <Login onLogin={handleLogin} />} />
         <Route path="/connect" element={!authed ? <Navigate to="/login" /> : <Connect />} />
-        <Route path="/tokens" element={!authed ? <Navigate to="/login" /> : <Tokens />} />
-        <Route path="/" element={!authed ? <Navigate to="/login" /> : <Workspace />} />
+        <Route path="/tokens" element={!authed ? <Navigate to="/login" /> : <Tokens onLogout={handleLogout} />} />
+        <Route path="/" element={!authed ? <Navigate to="/login" /> : <Workspace onLogout={handleLogout} />} />
       </Routes>
     </BrowserRouter>
   )

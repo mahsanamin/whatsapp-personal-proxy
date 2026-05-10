@@ -12,10 +12,7 @@ export default function Login({ onLogin }) {
     setError(null)
     setLoading(true)
     try {
-      await api('/auth/login', {
-        method: 'POST',
-        body: { username, password },
-      })
+      await api('/auth/login', { method: 'POST', body: { username, password } })
       onLogin()
     } catch (err) {
       setError(err.message)
@@ -26,40 +23,50 @@ export default function Login({ onLogin }) {
 
   return (
     <div className="flex items-center justify-center h-screen bg-bg">
-      <form onSubmit={handleSubmit} className="w-80 p-6 border border-border bg-surface">
-        <h1 className="text-lg font-mono font-semibold text-accent mb-6">wpp</h1>
-
-        {error && (
-          <div className="mb-4 text-sm text-red-400 border border-red-900 bg-red-950 p-2">
-            {error}
+      <div className="w-full max-w-sm">
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-accent/20 mb-4">
+            <span className="text-2xl font-mono font-bold text-accent">W</span>
           </div>
-        )}
+          <h1 className="text-lg font-semibold text-neutral-200">Welcome to WPP</h1>
+          <p className="text-xs text-neutral-500 mt-1">WhatsApp Personal Proxy</p>
+        </div>
 
-        <label className="block text-xs text-neutral-500 mb-1 font-mono">USERNAME</label>
-        <input
-          type="text"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          className="w-full bg-bg border border-border px-3 py-2 text-sm mb-4 outline-none focus:border-accent"
-          autoFocus
-        />
+        <form onSubmit={handleSubmit} className="bg-neutral-900/50 border border-neutral-800 rounded-2xl p-6">
+          {error && (
+            <div className="mb-4 text-xs text-red-400 bg-red-950/40 border border-red-900/40 rounded-lg px-3 py-2">
+              {error}
+            </div>
+          )}
 
-        <label className="block text-xs text-neutral-500 mb-1 font-mono">PASSWORD</label>
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="w-full bg-bg border border-border px-3 py-2 text-sm mb-6 outline-none focus:border-accent"
-        />
+          <label className="block text-[11px] text-neutral-500 mb-1.5 font-medium uppercase tracking-wider">Username</label>
+          <input
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            className="w-full bg-neutral-800/60 rounded-xl px-4 py-2.5 text-sm text-white placeholder-neutral-600 outline-none focus:ring-1 focus:ring-accent/50 transition-all mb-4"
+            placeholder="admin"
+            autoFocus
+          />
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full bg-accent text-black font-mono font-semibold py-2 text-sm hover:bg-emerald-400 disabled:opacity-50"
-        >
-          {loading ? 'Authenticating...' : 'Login'}
-        </button>
-      </form>
+          <label className="block text-[11px] text-neutral-500 mb-1.5 font-medium uppercase tracking-wider">Password</label>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="w-full bg-neutral-800/60 rounded-xl px-4 py-2.5 text-sm text-white placeholder-neutral-600 outline-none focus:ring-1 focus:ring-accent/50 transition-all mb-6"
+            placeholder="Enter password"
+          />
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-accent hover:bg-emerald-400 disabled:opacity-50 text-black font-semibold rounded-xl py-2.5 text-sm transition-all"
+          >
+            {loading ? 'Signing in...' : 'Sign In'}
+          </button>
+        </form>
+      </div>
     </div>
   )
 }
