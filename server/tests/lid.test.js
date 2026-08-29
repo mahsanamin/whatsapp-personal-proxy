@@ -105,3 +105,31 @@ test('console sessions are persisted, not held in memory', () => {
     'the default in-memory store signs the owner out on every restart',
   )
 })
+
+test('messages carry a resolved sender name, not a raw JID', () => {
+  const src = readFileSync(new URL('../src/api/messages.js', import.meta.url), 'utf8')
+  assert.ok(src.includes('from_name'), 'message reads no longer resolve the sender name')
+  assert.ok(src.includes('resolveNames'), 'sender names are no longer resolved through lid_map')
+})
+
+test('sender names resolve through the canonical address', () => {
+  const src = readFileSync(new URL('../src/db/lidmap.js', import.meta.url), 'utf8')
+  const fn = src.slice(src.indexOf('export function resolveNames'))
+  assert.ok(
+    fn.includes('canonicalJidMap'),
+    'without canonicalising, one contact reads as its address-book name on one ' +
+    'address and its pushName on the other',
+  )
+})
+
+test('a sender label is only drawn in group chats', () => {
+  const src = readFileSync(new URL('../../ui/src/pages/Workspace.jsx', import.meta.url), 'utf8')
+  assert.ok(
+    /const showSender = Boolean\(\s*isGroupChat/.test(src),
+    'a one-to-one chat has one other participant; labelling every bubble is noise',
+  )
+  assert.ok(
+    src.includes('msg.from_name ||'),
+    'the bubble shows the raw JID again instead of preferring the resolved name',
+  )
+})

@@ -76,20 +76,25 @@ function ChannelRow({ channel, active, onClick, onDragStart }) {
   )
 }
 
-function MessageBubble({ msg, prevMsg }) {
+function MessageBubble({ msg, prevMsg, isGroupChat }) {
   const isMe = msg.is_from_me
   const isMedia = msg.type !== 'text' && msg.type !== 'reaction' && msg.type !== 'unknown'
   const mediaLabels = { image: 'Photo', video: 'Video', doc: 'Document', audio: 'Audio', sticker: 'Sticker' }
+  // Only groups need a sender label; in a one-to-one chat there is exactly one
+  // other person and naming them above every bubble is noise.
   // Coerced: is_from_me is SQLite's 0/1, and `a && b && 0` evaluates to 0,
   // which React happily renders as a literal "0" above the bubble.
   const showSender = Boolean(
-    !isMe && msg.from_jid && (!prevMsg || prevMsg.from_jid !== msg.from_jid || prevMsg.is_from_me)
+    isGroupChat && !isMe && msg.from_jid &&
+    (!prevMsg || prevMsg.from_jid !== msg.from_jid || prevMsg.is_from_me)
   )
+  // Fall back to the number only when WhatsApp has given us no name for them.
+  const senderLabel = msg.from_name || msg.from_jid?.split('@')[0]
 
   return (
     <div className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-1 group`}>
       {showSender && (
-        <span className="text-[11px] text-accent/70 font-medium ml-1 mb-0.5">{msg.from_jid.split('@')[0]}</span>
+        <span className="text-[11px] text-accent/70 font-medium ml-1 mb-0.5">{senderLabel}</span>
       )}
       <div className="relative">
         <div className={`max-w-[480px] px-3 py-1.5 text-[13px] leading-relaxed rounded-2xl
@@ -626,7 +631,12 @@ export default function Workspace({ onLogout }) {
                   <div key={group.date}>
                     <DateSeparator date={group.date} />
                     {group.messages.map((msg, i) => (
-                      <MessageBubble key={msg.id} msg={msg} prevMsg={group.messages[i - 1]} />
+                      <MessageBubble
+                        key={msg.id}
+                        msg={msg}
+                        prevMsg={group.messages[i - 1]}
+                        isGroupChat={Boolean(activeJid?.endsWith('@g.us'))}
+                      />
                     ))}
                   </div>
                 ))}

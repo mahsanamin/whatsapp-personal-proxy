@@ -1,7 +1,7 @@
 import { db } from '../db/index.js'
 import { requireScope } from '../middleware/token.js'
 import { downloadMediaOnDemand } from '../wa/media.js'
-import { expandJids } from '../db/lidmap.js'
+import { expandJids, resolveNames } from '../db/lidmap.js'
 import { toJid, channelType } from '../util/jid.js'
 
 // Attach reactions to their target message and drop the standalone
@@ -20,9 +20,17 @@ function withReactions(messages) {
     reactionMap[r.quoted_id].push({ emoji: r.body, from: r.from_jid })
   }
 
-  return messages
-    .filter(m => m.type !== 'reaction')
-    .map(m => ({ ...m, reactions: reactionMap[m.id] || [] }))
+  const visible = messages.filter(m => m.type !== 'reaction')
+
+  // Attach the sender's name so callers do not each have to reimplement the
+  // lid_map lookup to avoid showing a raw JID.
+  const names = resolveNames(visible.map(m => m.from_jid))
+
+  return visible.map(m => ({
+    ...m,
+    from_name: names.get(m.from_jid) || null,
+    reactions: reactionMap[m.id] || [],
+  }))
 }
 
 const MESSAGE_COLUMNS =

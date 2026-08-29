@@ -59,6 +59,44 @@ export function canonicalJidMap(jids) {
 }
 
 /**
+ * Resolve sender JIDs to display names, following lid_map so a name saved
+ * against one of a contact's two addresses is found from the other.
+ * Returns a Map of jid -> name, omitting anything with no known name.
+ */
+export function resolveNames(jids) {
+  const wanted = [...new Set(jids.filter(j => typeof j === 'string' && j))]
+  const names = new Map()
+  if (wanted.length === 0) return names
+
+  // A contact can hold a different name on each of its two addresses: the
+  // address-book name lands on the phone-number row while a pushName lands on
+  // the @lid one. Resolve through the canonical address first so one person
+  // reads with one name everywhere, whichever address a message arrived on.
+  const canonical = canonicalJidMap(wanted)
+  const lookups = [...new Set([...wanted, ...canonical.values()])]
+  const placeholders = lookups.map(() => '?').join(',')
+
+  try {
+    const own = new Map()
+    for (const row of db.prepare(
+      `SELECT jid, display_name FROM channel_meta
+       WHERE jid IN (${placeholders}) AND display_name IS NOT NULL`
+    ).all(...lookups)) {
+      own.set(row.jid, row.display_name)
+    }
+
+    for (const jid of wanted) {
+      // A group is never a sender; own messages fall back to the chat's JID.
+      if (jid.endsWith('@g.us')) continue
+      const name = own.get(canonical.get(jid) || jid) || own.get(jid)
+      if (name) names.set(jid, name)
+    }
+  } catch (_) {}
+
+  return names
+}
+
+/**
  * Rebuild lid_map from message keys already on disk, and propagate contact
  * names across every pair it learns.
  *
