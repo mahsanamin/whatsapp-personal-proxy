@@ -64,3 +64,15 @@ test('the console offers a way to manage the allow list', () => {
   const app = read('../../ui/src/App.jsx')
   assert.ok(app.includes('path="/whitelist"'), 'the allow-list page is not routed')
 })
+
+test('permission is decided before the request body is validated', () => {
+  const src = read('../src/api/sendText.js')
+  const guardAt = src.indexOf('refuseIfNotAllowed')
+  const bodyAt = src.indexOf("code: 'BAD_INPUT'")
+  assert.ok(guardAt > -1 && bodyAt > -1, 'sendText lost a check')
+  assert.ok(
+    guardAt < bodyAt,
+    'a caller who may not message this destination should not learn whether ' +
+    'their request was otherwise well formed',
+  )
+})

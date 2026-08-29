@@ -9,11 +9,14 @@ export const sendRateLimit = config.rateLimitSend > 0
 
 /** Shared body handling for the three text-send routes. */
 export async function sendText(request, reply, jid) {
+  // Permission first: a caller who may not message this destination should not
+  // learn anything about whether their request was otherwise well formed.
+  if (refuseIfNotAllowed(request, reply, jid)) return
+
   const { message, reply_to: replyTo } = request.body || {}
   if (!message) {
     return reply.code(400).send({ error: 'Field "message" required', code: 'BAD_INPUT' })
   }
-  if (refuseIfNotAllowed(request, reply, jid)) return
 
   const sock = ensureConnected()
   if (!sock) {
