@@ -81,3 +81,16 @@ export function identifyCaller(request) {
     last_used: token.last_used,
   }
 }
+
+/**
+ * Authenticate without demanding a specific scope, and expose the caller on
+ * the request. For routes whose required scope depends on the destination —
+ * a media send needs groups:send or others:send depending on where it is going.
+ */
+export async function requireAnyCredential(request, reply) {
+  const caller = identifyCaller(request)
+  if (!caller) {
+    return reply.code(401).send({ error: 'Unauthorized', code: 'UNAUTHORIZED' })
+  }
+  request.token = caller
+}

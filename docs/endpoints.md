@@ -107,6 +107,28 @@ An API key may only reach `PERSONAL_NUMBERS` plus the entries on the allow list
 groups as well as DMs: a key with `groups:send` can only message groups that
 were explicitly allowed.
 
+## Media and message actions
+
+| Method | Path | Scope | Notes |
+|---|---|---|---|
+| `POST` | `/api/media/send` | depends on destination | Body is the **raw file bytes**; metadata goes in the query string: `to`, `kind`, `caption`, `filename`, `mimetype`, `voice`, `gif`, `reply_to`. Up to 100 MB |
+| `POST` | `/api/messages/:id/react` | destination-gated | `{ emoji }` — an empty emoji removes your reaction |
+| `POST` | `/api/messages/:id/edit` | destination-gated | `{ message }` — your own messages only |
+| `DELETE` | `/api/messages/:id` | destination-gated | Deletes for everyone; your own messages only |
+| `POST` | `/api/channels/:jid/receipts` | `channels:read` | Sends real read receipts (blue ticks) |
+| `POST` | `/api/channels/:jid/presence` | destination-gated | `{ state }` — composing, recording, paused, available, unavailable |
+| `POST` | `/api/channels/:jid/read` | `channels:read` | Local unread bookkeeping only; invisible to the sender |
+
+Media uploads carry the bytes as the request body rather than multipart so the
+CLI needs no encoder and the server no extra package. `Content-Type:
+application/octet-stream` with `?mimetype=` is the reliable form — Fastify's
+built-in parsers otherwise reinterpret `text/plain` and `application/json`
+bodies.
+
+**Message types:** `text`, `image`, `video`, `audio`, `voice`, `doc`,
+`sticker`, `reaction`, `deleted`, `unknown`. `voice` is a voice note (`ptt`);
+`audio` is an attached audio file.
+
 ## Whitelist
 
 | Method | Path | Scope |

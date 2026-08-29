@@ -416,6 +416,30 @@ export async function createWAClient(sessionPath, eventBus) {
   return sock
 }
 
+/**
+ * Protobuf numbers arrive as Long objects ({low, high, unsigned}), not JS
+ * numbers, and better-sqlite3 refuses to bind an object. fileLength is one, so
+ * every image, video, audio and document threw on insert and was swallowed by
+ * the catch around ingestion — which is why the mirror held text and stickers
+ * (the one media branch that never sets a size) and nothing else.
+ */
+function toNumber(value) {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value === 'bigint') return Number(value)
+  if (typeof value === 'string') {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  if (typeof value.toNumber === 'function') {
+    try { return value.toNumber() } catch (_) { return null }
+  }
+  if (typeof value.low === 'number') {
+    return value.low + (value.high || 0) * 4294967296
+  }
+  return null
+}
+
 function normalizeMessage(raw) {
   const key = raw.key
   if (!key?.id || !key?.remoteJid) return null
@@ -455,7 +479,7 @@ function normalizeMessage(raw) {
     type = 'image'
     body = msg.imageMessage.caption || null
     mediaMime = msg.imageMessage.mimetype
-    mediaSize = msg.imageMessage.fileLength
+    mediaSize = toNumber(msg.imageMessage.fileLength)
     mediaSha256 = msg.imageMessage.fileSha256 ? Buffer.from(msg.imageMessage.fileSha256).toString('hex') : null
     mediaKey = msg.imageMessage.mediaKey ? Buffer.from(msg.imageMessage.mediaKey).toString('base64') : null
     mediaUrl = msg.imageMessage.url
@@ -463,7 +487,7 @@ function normalizeMessage(raw) {
     type = 'video'
     body = msg.videoMessage.caption || null
     mediaMime = msg.videoMessage.mimetype
-    mediaSize = msg.videoMessage.fileLength
+    mediaSize = toNumber(msg.videoMessage.fileLength)
     mediaSha256 = msg.videoMessage.fileSha256 ? Buffer.from(msg.videoMessage.fileSha256).toString('hex') : null
     mediaKey = msg.videoMessage.mediaKey ? Buffer.from(msg.videoMessage.mediaKey).toString('base64') : null
     mediaUrl = msg.videoMessage.url
@@ -471,14 +495,16 @@ function normalizeMessage(raw) {
     type = 'doc'
     body = msg.documentMessage.fileName || null
     mediaMime = msg.documentMessage.mimetype
-    mediaSize = msg.documentMessage.fileLength
+    mediaSize = toNumber(msg.documentMessage.fileLength)
     mediaSha256 = msg.documentMessage.fileSha256 ? Buffer.from(msg.documentMessage.fileSha256).toString('hex') : null
     mediaKey = msg.documentMessage.mediaKey ? Buffer.from(msg.documentMessage.mediaKey).toString('base64') : null
     mediaUrl = msg.documentMessage.url
   } else if (msg.audioMessage) {
-    type = 'audio'
+    // WhatsApp shows a voice note as a waveform and an audio file as an
+    // attachment. They are different things to a reader, so name them apart.
+    type = msg.audioMessage.ptt ? 'voice' : 'audio'
     mediaMime = msg.audioMessage.mimetype
-    mediaSize = msg.audioMessage.fileLength
+    mediaSize = toNumber(msg.audioMessage.fileLength)
     mediaSha256 = msg.audioMessage.fileSha256 ? Buffer.from(msg.audioMessage.fileSha256).toString('hex') : null
     mediaKey = msg.audioMessage.mediaKey ? Buffer.from(msg.audioMessage.mediaKey).toString('base64') : null
     mediaUrl = msg.audioMessage.url
@@ -524,6 +550,16 @@ function normalizeMessage(raw) {
 }
 
 function saveMessage(msg) {
+  try {
+    insertMessage(msg)
+  } catch (err) {
+    // Losing a message silently is how the media bug above survived so long.
+    logger.warn({ err: err.message, id: msg.id, type: msg.type }, 'failed to store message')
+    throw err
+  }
+}
+
+function insertMessage(msg) {
   db.prepare(`
     INSERT OR REPLACE INTO messages
     (id, jid, from_jid, body, type, media_mime, media_size, media_sha256, media_key, media_url, timestamp, is_from_me, status, quoted_id, mentions_me, raw_json)
@@ -573,6 +609,26 @@ export function clearSession() {
     mkdirSync(sessionDir, { recursive: true })
   } catch (_) {}
   linkedCache = false
+}
+
+/**
+ * Persist a message we just sent, immediately.
+ *
+ * Sent messages otherwise only land when WhatsApp echoes them back through
+ * messages.upsert, which is a moment later — long enough that replying to or
+ * reacting to a message you just sent failed with NOT_FOUND. Writing it here
+ * makes the id usable the instant the send returns. The later echo rewrites
+ * the same primary key, so nothing is duplicated.
+ */
+export function recordSentMessage(raw) {
+  try {
+    const normalized = normalizeMessage(raw)
+    if (!normalized) return null
+    saveMessage(normalized)
+    return normalized
+  } catch (_) {
+    return null
+  }
 }
 
 export function getSock() {

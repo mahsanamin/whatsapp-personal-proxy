@@ -346,6 +346,8 @@ export default function Workspace({ onLogout }) {
   const [waLinked, setWaLinked] = useState(true)
   const [syncingContacts, setSyncingContacts] = useState(false)
   const [syncNote, setSyncNote] = useState(null)
+  const [uploading, setUploading] = useState(false)
+  const fileRef = useRef(null)
   const [search, setSearch] = useState('')
   const [sendError, setSendError] = useState(null)
   const [syncStats, setSyncStats] = useState({ channels: 0, messages: 0 })
@@ -468,6 +470,33 @@ export default function Workspace({ onLogout }) {
       setSendError(err.message)
       setTimeout(() => setSendError(null), 5000)
     }
+  }
+
+  // Upload straight to /media/send as raw bytes; the server takes the metadata
+  // from the query string, so there is no multipart handling on either side.
+  const handleAttach = async (file) => {
+    if (!file || !activeJid) return
+    setSendError(null)
+    setUploading(true)
+    try {
+      const params = new URLSearchParams({ to: activeJid, filename: file.name })
+      if (file.type) params.set('mimetype', file.type)
+      const res = await fetch(`/api/media/send?${params}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: file,
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }))
+        throw new Error(err.error || 'Upload failed')
+      }
+    } catch (err) {
+      setSendError(err.message)
+      setTimeout(() => setSendError(null), 5000)
+    }
+    setUploading(false)
+    if (fileRef.current) fileRef.current.value = ''
   }
 
   const handleCreateTab = async (name) => {
@@ -650,6 +679,28 @@ export default function Workspace({ onLogout }) {
                   <div className="px-5 py-1.5 text-xs text-red-400 bg-red-950/30">{sendError}</div>
                 )}
                 <form onSubmit={handleSend} className="px-5 py-3 flex items-center gap-3">
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    className="hidden"
+                    onChange={(e) => handleAttach(e.target.files?.[0])}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileRef.current?.click()}
+                    disabled={uploading}
+                    title="Attach a photo, video, audio file or document"
+                    className="text-neutral-500 hover:text-accent disabled:opacity-40 transition-colors flex-shrink-0"
+                  >
+                    {uploading ? (
+                      <span className="text-xs">Sending…</span>
+                    ) : (
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8}
+                          d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                      </svg>
+                    )}
+                  </button>
                   <input
                     ref={inputRef}
                     type="text"

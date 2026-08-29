@@ -7,28 +7,39 @@ import { readFileSync } from 'node:fs'
 // and a route added later must not quietly opt out of it.
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8')
 
+// The destination rules moved into util/sendPermission.js so every send route
+// — text and media alike — asks the same question. These assert the rules
+// there, since that is now the only place they exist.
+
 test('a DM from an API key requires the recipient to be allowed', () => {
-  const src = read('../src/api/others.js')
-  assert.ok(src.includes('FROM whitelist WHERE jid = ?'), 'others/send lost its allow-list check')
-  assert.ok(src.includes('NOT_WHITELISTED'), 'others/send no longer reports why it refused')
+  const guard = read('../src/util/sendPermission.js')
+  assert.ok(guard.includes('FROM whitelist WHERE jid = ?'), 'the allow-list lookup is gone')
+  assert.ok(guard.includes('NOT_WHITELISTED'), 'the guard no longer reports why it refused')
+  assert.ok(read('../src/api/others.js').includes('sendText'), 'others/send bypasses the shared guard')
 })
 
 test('a group message from an API key requires the group to be allowed', () => {
-  const src = read('../src/api/groups.js')
+  const guard = read('../src/util/sendPermission.js')
   assert.ok(
-    src.includes('FROM whitelist WHERE jid = ?'),
-    'groups/send accepts any group again — a key with groups:send could message every group you are in',
+    guard.includes('isGroup(jid)') && guard.includes('isAllowed(jid)'),
+    'groups are exempt from the allow list again — a key with groups:send could ' +
+    'message every group you are in',
   )
   assert.ok(
-    src.includes("request.session?.authenticated"),
-    'the group allow-list check must exempt the console session, which may message anyone',
+    guard.includes('request.session?.authenticated'),
+    'the guard must exempt the console session, which may message anyone',
   )
+  assert.ok(read('../src/api/groups.js').includes('sendText'), 'groups/send bypasses the shared guard')
 })
 
 test('personal sends are limited to the configured numbers', () => {
-  const src = read('../src/api/personal.js')
-  assert.ok(src.includes('config.personalNumbers.includes'), 'personal/send lost its number check')
-  assert.ok(src.includes('NOT_PERSONAL_NUMBER'), 'personal/send no longer reports why it refused')
+  const guard = read('../src/util/sendPermission.js')
+  assert.ok(guard.includes('config.personalNumbers'), 'the own-numbers check is gone')
+  assert.ok(
+    guard.includes("scopes.includes('personal:send')"),
+    'reaching your own numbers must still require the personal:send scope',
+  )
+  assert.ok(read('../src/api/personal.js').includes('sendText'), 'personal/send bypasses the shared guard')
 })
 
 test('the unrestricted send route is reachable only by the console', () => {

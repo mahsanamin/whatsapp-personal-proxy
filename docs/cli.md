@@ -131,6 +131,67 @@ browser you can message anyone.
 Agents should use `--yes` only after the user has authorized that exact message and
 recipient. For multiline or shell-sensitive text, use `--text-stdin`.
 
+### Files, photos and voice notes
+
+```bash
+wpp send "Family" --file holiday.jpg --caption "from the trip" --yes
+wpp send "Family" --file clip.mp4 --caption "watch this" --yes
+wpp send "Family" --file report.pdf --yes                  # sent as a document
+wpp send "Family" --file note.ogg --voice --yes            # a WhatsApp voice note
+wpp send "Family" --file loop.mp4 --gif --yes              # plays as a looping GIF
+wpp send "Family" --file sticker.webp --kind sticker --yes
+```
+
+How WhatsApp presents the file is taken from its type; `--kind` overrides that
+(`image`, `video`, `audio`, `document`, `sticker`).
+
+`--voice` is its own flag because WhatsApp treats a voice note and an audio
+file as different things: a voice note shows a waveform and plays inline. It
+wants **Opus in an Ogg container** — other codecs upload, but some clients will
+not play them inline. To convert:
+
+```bash
+ffmpeg -i input.m4a -c:a libopus -b:a 32k note.ogg
+wpp send "Family" --file note.ogg --voice --yes
+```
+
+Documents up to 100 MB; other media follows WhatsApp's own ~16 MB ceiling.
+
+### Replying, reacting, editing, deleting
+
+```bash
+wpp send "Family" 'on my way' --reply-to 3EB0AB… --yes   # quote a message
+wpp send "Family" --file map.png --reply-to 3EB0AB… --yes
+wpp react 3EB0AB… 👍 --yes
+wpp react 3EB0AB… --yes                                   # remove your reaction
+wpp edit 3EB0AB… 'corrected text' --yes                   # your own messages only
+wpp delete 3EB0AB… --yes                                  # deletes for everyone
+```
+
+Message ids come from `wpp history`. Editing and deleting work only on your own
+messages, and WhatsApp allows both only for a limited window after sending.
+
+### Downloading media you received
+
+Media is never downloaded automatically — metadata is stored and the bytes are
+fetched only when you ask.
+
+```bash
+wpp media get "Family" 3EB0AB… --out photo.jpg   # download to a file
+wpp media save "Family" 3EB0AB…                  # keep a copy on the server
+```
+
+### Read receipts and typing
+
+```bash
+wpp receipts "Family"                 # send blue ticks for what you have read
+wpp typing "Family" --state composing # show a typing indicator
+wpp typing "Family" --state recording # ...or a recording one
+```
+
+`wpp read` is local bookkeeping and invisible to anyone else. `wpp receipts`
+is the real thing the sender sees.
+
 ### Whitelist
 
 Sending to anyone who is not one of your own numbers requires them on the whitelist.

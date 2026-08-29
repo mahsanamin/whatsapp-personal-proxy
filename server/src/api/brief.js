@@ -26,7 +26,8 @@ function score(chat) {
 
 function preview(body, type, limit = 140) {
   if (body) return body.length > limit ? body.slice(0, limit - 1) + '…' : body
-  return type === 'text' ? '' : `[${type}]`
+  if (type === 'text') return ''
+  return type === 'voice' ? '[voice note]' : `[${type}]`
 }
 
 export default async function briefRoutes(fastify) {

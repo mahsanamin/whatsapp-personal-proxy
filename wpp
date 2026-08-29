@@ -4,6 +4,7 @@
 import argparse
 import getpass
 import json
+import mimetypes
 import os
 import re
 import shutil
@@ -158,6 +159,78 @@ def api_call(profile, method, path, params=None, body=None, auth=True):
         raise WppError("Invalid response from server: %s" % exc, "BAD_RESPONSE")
 
 
+VOICE_MIME = "audio/ogg; codecs=opus"
+
+
+def guess_mimetype(path, override=None):
+    if override:
+        return override
+    guessed, _ = mimetypes.guess_type(str(path))
+    return guessed or "application/octet-stream"
+
+
+def api_upload(profile, path, file_path, params=None, mimetype=None):
+    """POST raw file bytes. The server takes the body as-is with metadata in
+    the query string, so no multipart encoder is needed here."""
+    data = Path(file_path).expanduser().read_bytes()
+    if not data:
+        raise WppError("File is empty: %s" % file_path, "BAD_ARGUMENT")
+
+    url = profile["url"] + path
+    cleaned = {k: v for k, v in (params or {}).items() if v is not None}
+    if cleaned:
+        url += "?" + parse.urlencode(cleaned)
+
+    key = profile.get("key")
+    if not key:
+        raise WppError("Profile has no API token; reconnect it", "MISSING_TOKEN")
+    req = request.Request(url, data=data, method="POST", headers={
+        "Accept": "application/json",
+        "User-Agent": "wpp/%s" % VERSION,
+        "Authorization": "Bearer %s" % key,
+        # Always octet-stream: the real type travels in ?mimetype= so no
+        # server-side content-type parser can reinterpret the bytes.
+        "Content-Type": "application/octet-stream",
+        "Content-Length": str(len(data)),
+    })
+    context = ssl._create_unverified_context() if (profile.get("insecure") and url.startswith("https://")) else None
+    try:
+        with request.urlopen(req, timeout=profile.get("timeout", 300), context=context) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else {"ok": True}
+    except error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            server = json.loads(raw)
+            raise WppError(server.get("error", "HTTP %s" % exc.code), server.get("code", "HTTP_ERROR"), exc.code)
+        except ValueError:
+            raise WppError("Server returned HTTP %s" % exc.code, "HTTP_ERROR", exc.code)
+    except error.URLError as exc:
+        raise WppError("Could not reach %s: %s" % (profile["url"], exc.reason), "CONNECTION_FAILED")
+
+
+def api_download(profile, path, out_path):
+    """GET binary content straight to a file."""
+    req, context, _url = build_request(profile, "GET", path, accept="*/*")
+    try:
+        with request.urlopen(req, timeout=profile.get("timeout", 300), context=context) as response:
+            content_type = response.headers.get("Content-Type", "application/octet-stream")
+            target = Path(out_path).expanduser()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(target, "wb") as handle:
+                shutil.copyfileobj(response, handle)
+            return {"saved": str(target), "bytes": target.stat().st_size, "mimetype": content_type}
+    except error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            server = json.loads(raw)
+            raise WppError(server.get("error", "HTTP %s" % exc.code), server.get("code", "HTTP_ERROR"), exc.code)
+        except ValueError:
+            raise WppError("Server returned HTTP %s" % exc.code, "HTTP_ERROR", exc.code)
+    except error.URLError as exc:
+        raise WppError("Could not reach %s: %s" % (profile["url"], exc.reason), "CONNECTION_FAILED")
+
+
 def bool_text(value):
     return "true" if value else "false"
 
@@ -177,7 +250,7 @@ def compact_message(m):
     if m.get("type") and m["type"] != "text":
         out["type"] = m["type"]
         if not out["text"]:
-            out["text"] = "[%s]" % m["type"]
+            out["text"] = "[voice note]" if m["type"] == "voice" else "[%s]" % m["type"]
     if m.get("mentions_me"):
         out["mentions_you"] = True
     if m.get("quoted_id"):
@@ -402,13 +475,16 @@ def is_personal(profile, jid):
 
 
 def do_send(args, profile):
+    resolved = resolve_target(profile, args.target)
+
+    if args.file:
+        return do_send_media(args, profile, resolved)
+
     text = args.text
     if args.text_stdin or text is None:
         text = sys.stdin.read().rstrip("\n")
     if not text:
         raise WppError("Message text cannot be empty", "BAD_ARGUMENT")
-
-    resolved = resolve_target(profile, args.target)
     jid = resolved["jid"]
     label = resolved["display_name"] or jid
 
@@ -424,11 +500,12 @@ def do_send(args, profile):
     require_confirmation(args, "Send message to %s (%s)?" % (label, route))
 
     def send_via(which):
+        extra = {"reply_to": args.reply_to} if args.reply_to else {}
         if which == "group":
-            return api_call(profile, "POST", "/api/groups/send", body={"jid": jid, "message": text})
+            return api_call(profile, "POST", "/api/groups/send", body={"jid": jid, "message": text, **extra})
         number = "+" + jid.split("@")[0]
         path = "/api/personal/send" if which == "personal" else "/api/others/send"
-        return api_call(profile, "POST", path, body={"to": number, "message": text})
+        return api_call(profile, "POST", path, body={"to": number, "message": text, **extra})
 
     try:
         result = send_via(route)
@@ -450,6 +527,44 @@ def do_send(args, profile):
         "to": jid,
         "display_name": resolved["display_name"],
         "route": route,
+        "message_id": result.get("messageId"),
+        **({"reply_to": args.reply_to} if args.reply_to else {}),
+    })
+
+
+def do_send_media(args, profile, resolved):
+    """Send a file. WhatsApp distinguishes a voice note from an audio file, so
+    --voice is its own flag rather than something inferred from the extension."""
+    source = Path(args.file).expanduser()
+    if not source.is_file():
+        raise WppError("No such file: %s" % source, "BAD_ARGUMENT")
+
+    jid = resolved["jid"]
+    label = resolved["display_name"] or jid
+    mimetype = VOICE_MIME if args.voice else guess_mimetype(source, args.mimetype)
+
+    what = "voice note" if args.voice else (args.kind or "file")
+    require_confirmation(args, "Send %s (%s) to %s?" % (source.name, what, label))
+
+    result = api_upload(profile, "/api/media/send", source, {
+        "to": jid,
+        "kind": args.kind,
+        "caption": args.caption,
+        "filename": source.name,
+        "voice": bool_text(args.voice) if args.voice else None,
+        "gif": bool_text(args.gif) if args.gif else None,
+        "reply_to": args.reply_to,
+        "mimetype": mimetype,
+    }, mimetype=mimetype)
+
+    return ok({
+        "sent": True,
+        "to": jid,
+        "display_name": resolved["display_name"],
+        "file": str(source),
+        "kind": result.get("kind"),
+        "bytes": result.get("bytes"),
+        "voice_note": bool(result.get("voice_note")),
         "message_id": result.get("messageId"),
     })
 
@@ -604,6 +719,59 @@ def run_api_command(args, profile, pretty):
     if command == "send":
         return do_send(args, profile)
 
+    if command == "react":
+        require_confirmation(args, "React %s to message %s?" % (args.emoji or "(remove)", args.message_id))
+        result = api_call(profile, "POST", "/api/messages/%s/react" % parse.quote(args.message_id, safe=""),
+                          body={"emoji": args.emoji or ""})
+        return ok(result)
+
+    if command == "edit":
+        text = args.text
+        if args.text_stdin or text is None:
+            text = sys.stdin.read().rstrip("\n")
+        if not text:
+            raise WppError("Replacement text cannot be empty", "BAD_ARGUMENT")
+        require_confirmation(args, "Edit message %s?" % args.message_id)
+        return ok(api_call(profile, "POST", "/api/messages/%s/edit" % parse.quote(args.message_id, safe=""),
+                           body={"message": text}))
+
+    if command == "delete":
+        require_confirmation(args, "Delete message %s for everyone? This cannot be undone." % args.message_id)
+        return ok(api_call(profile, "DELETE", "/api/messages/%s" % parse.quote(args.message_id, safe="")))
+
+    if command == "receipts":
+        resolved = resolve_target(profile, args.target)
+        result = api_call(profile, "POST",
+                          "/api/channels/%s/receipts" % parse.quote(resolved["jid"], safe=""))
+        return ok({"chat": resolved, **result})
+
+    if command == "typing":
+        resolved = resolve_target(profile, args.target)
+        result = api_call(profile, "POST",
+                          "/api/channels/%s/presence" % parse.quote(resolved["jid"], safe=""),
+                          body={"state": args.state})
+        return ok({"chat": resolved, **result})
+
+    if command == "media":
+        if args.media_action == "get":
+            resolved = resolve_target(profile, args.target)
+            out = args.out or ("wpp-media-%s" % args.message_id)
+            result = api_download(
+                profile,
+                "/api/channels/%s/messages/%s/media" % (
+                    parse.quote(resolved["jid"], safe=""), parse.quote(args.message_id, safe=""),
+                ),
+                out,
+            )
+            return ok({"chat": resolved, "message_id": args.message_id, **result})
+        if args.media_action == "save":
+            resolved = resolve_target(profile, args.target)
+            result = api_call(profile, "POST", "/api/channels/%s/messages/%s/media/save" % (
+                parse.quote(resolved["jid"], safe=""), parse.quote(args.message_id, safe=""),
+            ))
+            return ok({"chat": resolved, "message_id": args.message_id, **result})
+        raise WppError("Unknown media action", "BAD_COMMAND")
+
     if command == "watch":
         return do_watch(args, profile, pretty)
 
@@ -728,12 +896,54 @@ def build_parser():
     p.add_argument("--type", help="Filter by message type")
     p.add_argument("--verbose", action="store_true", help="Full records instead of the compact shape")
 
-    p = sub.add_parser("send", help="Send a message to a personal number, a whitelisted DM, or a group")
+    p = sub.add_parser("send", help="Send text or a file to a number, chat name, or group")
     p.add_argument("target", help="Number, JID, or chat name")
     p.add_argument("text", nargs="?")
     p.add_argument("--text-stdin", action="store_true", help="Read the message body from stdin")
+    p.add_argument("--file", help="Send this file instead of text")
+    p.add_argument("--caption", help="Caption for an image, video, or document")
+    p.add_argument("--voice", action="store_true",
+                   help="Send audio as a WhatsApp voice note (Opus/Ogg plays inline everywhere)")
+    p.add_argument("--gif", action="store_true", help="Play a short video as a looping GIF")
+    p.add_argument("--kind", choices=("image", "video", "audio", "document", "sticker"),
+                   help="Override how WhatsApp presents the file (default: from its type)")
+    p.add_argument("--mimetype", help="Override the detected MIME type")
+    p.add_argument("--reply-to", metavar="MESSAGE_ID", help="Quote a message in the reply")
     p.add_argument("--route", choices=("auto", "personal", "others", "group"), default="auto")
     p.add_argument("--yes", action="store_true")
+
+    p = sub.add_parser("react", help="React to a message (empty emoji removes your reaction)")
+    p.add_argument("message_id")
+    p.add_argument("emoji", nargs="?", default="")
+    p.add_argument("--yes", action="store_true")
+
+    p = sub.add_parser("edit", help="Edit one of your own messages")
+    p.add_argument("message_id")
+    p.add_argument("text", nargs="?")
+    p.add_argument("--text-stdin", action="store_true")
+    p.add_argument("--yes", action="store_true")
+
+    p = sub.add_parser("delete", help="Delete one of your own messages for everyone")
+    p.add_argument("message_id")
+    p.add_argument("--yes", action="store_true")
+
+    p = sub.add_parser("receipts", help="Send read receipts (blue ticks) for a chat")
+    p.add_argument("target")
+
+    p = sub.add_parser("typing", help="Show a typing or recording indicator in a chat")
+    p.add_argument("target")
+    p.add_argument("--state", choices=("composing", "recording", "paused", "available", "unavailable"),
+                   default="composing")
+
+    p = sub.add_parser("media", help="Download media from a received message")
+    ma = p.add_subparsers(dest="media_action", required=True)
+    g = ma.add_parser("get", help="Download to a local file")
+    g.add_argument("target", help="The chat the message is in")
+    g.add_argument("message_id")
+    g.add_argument("--out", help="Where to write it (default: wpp-media-<id>)")
+    sv = ma.add_parser("save", help="Ask the server to keep a copy under MEDIA_PATH")
+    sv.add_argument("target")
+    sv.add_argument("message_id")
 
     p = sub.add_parser("whitelist", help="Manage the DM send whitelist")
     wl = p.add_subparsers(dest="whitelist_action", required=True)

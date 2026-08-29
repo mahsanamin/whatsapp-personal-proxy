@@ -104,6 +104,36 @@ A token may only message the owner's own numbers plus the allow list, groups
 included. Anything else returns `NOT_WHITELISTED`; the owner adds people in the
 web console under **Allow list**. Do not try other routes to get around it.
 
+## Files and voice notes
+
+```bash
+wpp send "Family" --file photo.jpg --caption "from the trip" --yes
+wpp send "Family" --file report.pdf --yes            # document
+wpp send "Family" --file note.ogg --voice --yes      # voice note (Opus/Ogg)
+wpp media get "Family" <message-id> --out photo.jpg  # download what you received
+```
+
+A voice note is not the same as an audio file: `--voice` makes WhatsApp render
+a waveform that plays inline, and it wants Opus in Ogg. Converting is the
+caller's business (`ffmpeg -i in.m4a -c:a libopus -b:a 32k out.ogg`); this CLI
+only sends what it is given.
+
+Received media is never downloaded until asked for. In a transcript it appears
+as `[image]`, `[voice note]`, `[doc]` and so on, with the message id you pass to
+`wpp media get`.
+
+## Replying and reacting
+
+```bash
+wpp send "Family" 'agreed' --reply-to <message-id> --yes
+wpp react <message-id> 👍 --yes
+wpp edit <message-id> 'corrected' --yes    # your own messages, limited window
+wpp delete <message-id> --yes              # deletes for everyone, irreversible
+```
+
+Prefer `--reply-to` when answering a specific message in a busy group; it is
+what makes the answer legible to everyone else.
+
 ## Live
 
 ```bash
