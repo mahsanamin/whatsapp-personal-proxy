@@ -40,7 +40,7 @@ machine** so one can be revoked without disturbing the others.
 Named profiles support more than one server or identity:
 
 ```bash
-wpp connect http://100.100.50.3:3300 --name home
+wpp connect http://SERVER:3300 --name home
 wpp profiles
 wpp use home
 wpp --profile home status

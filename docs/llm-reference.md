@@ -31,7 +31,7 @@ any session — prefer it over listing chats and fetching each one.
   "totals": { "chats": 8, "messages": 96, "mentions": 2, "replies": 1 },
   "chats": [
     {
-      "jid": "923214461264@s.whatsapp.net",
+      "jid": "12025550100@s.whatsapp.net",
       "type": "dm",
       "display_name": "Ahsan Primary",
       "unread_count": 3,
@@ -72,7 +72,7 @@ unread.** After summarising a chat for the user, mark it read.
 wpp chats --type group                 # list chats
 wpp chats --search alice --type dm
 wpp history "Family" --count 50        # a chat, oldest-first, reads as a transcript
-wpp history +923214461264 --count 50
+wpp history +12025550100 --count 50
 wpp history "Family" --after 2026-08-01T00:00:00Z
 wpp search "invoice"                   # across everything
 wpp search "invoice" --chat "Family"
@@ -91,7 +91,7 @@ This is handled for you: one chat, one row, one name, and reads span both.
 
 ```bash
 wpp send "Family" 'on my way' --yes
-wpp send +923214461264 'hello' --yes
+wpp send +12025550100 'hello' --yes
 wpp send "Family" --text-stdin --yes < message.txt
 ```
 

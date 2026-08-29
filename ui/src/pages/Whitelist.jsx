@@ -127,7 +127,7 @@ export default function Whitelist() {
                 type="text"
                 value={manual}
                 onChange={(e) => setManual(e.target.value)}
-                placeholder="+923214461264"
+                placeholder="+12025550100"
                 className="flex-1 bg-neutral-800/60 rounded-xl px-4 py-2.5 text-sm text-white placeholder-neutral-600 outline-none focus:ring-1 focus:ring-accent/50"
               />
               <input
