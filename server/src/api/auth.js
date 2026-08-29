@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import { config } from '../config.js'
 import { identifyCaller } from '../middleware/token.js'
-import { getSock, isLinked } from '../wa/client.js'
+import { getSock, isLinked, clearSession } from '../wa/client.js'
 
 function constantTimeEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false
@@ -51,7 +51,7 @@ export default async function authRoutes(fastify) {
       },
       wa: {
         status: fastify.eventBus.waStatus || 'close',
-        linked: isLinked() || Boolean(fastify.eventBus.waLinked),
+        linked: isLinked(),
         user: sock?.user ? { id: sock.user.id, name: sock.user.name ?? null } : null,
       },
       server: {
@@ -79,7 +79,7 @@ export default async function authRoutes(fastify) {
       // Whether a phone has ever completed pairing. `status` alone cannot tell
       // "never linked, waiting to be scanned" from "linked, reconnecting" —
       // both sit in `connecting`.
-      linked: isLinked() || Boolean(eventBus.waLinked),
+      linked: isLinked(),
       qr: qrFresh ? eventBus.lastQr : null,
       qr_age: qrAge,
     }
@@ -88,7 +88,17 @@ export default async function authRoutes(fastify) {
   // Force fresh QR generation — resets retries and reconnects
   fastify.post('/auth/wa/refresh-qr', {
     preHandler: fastify.requireSession,
-  }, async () => {
+  }, async (request, reply) => {
+    // Refreshing tears the socket down and rebuilds it. Doing that to an
+    // already-linked account interrupts its sync for no reason, so refuse
+    // unless the caller really means it.
+    if (isLinked()) {
+      return reply.code(409).send({
+        error: 'WhatsApp is already linked. Unlink first to pair a different phone.',
+        code: 'ALREADY_LINKED',
+      })
+    }
+
     const { createWAClient, resetRetries } = await import('../wa/client.js')
     resetRetries()
     const eventBus = fastify.eventBus
@@ -96,6 +106,23 @@ export default async function authRoutes(fastify) {
     eventBus.qrTimestamp = null
     createWAClient(config.waSessionPath, eventBus)
     return { ok: true, message: 'Generating fresh QR code...' }
+  })
+
+  // Unlink this device and start over. Destroys the stored credentials, so the
+  // next connection begins a fresh pairing.
+  fastify.post('/auth/wa/logout', {
+    preHandler: fastify.requireSession,
+  }, async () => {
+    const { createWAClient, resetRetries, getSock: sock } = await import('../wa/client.js')
+    try { await sock()?.logout() } catch (_) {}
+    clearSession()
+
+    const eventBus = fastify.eventBus
+    eventBus.lastQr = null
+    eventBus.qrTimestamp = null
+    resetRetries()
+    createWAClient(config.waSessionPath, eventBus)
+    return { ok: true, message: 'Unlinked. Scan a QR code to link again.' }
   })
 
   fastify.get('/auth/wa/qr', (request, reply) => {

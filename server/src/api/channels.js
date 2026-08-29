@@ -2,6 +2,7 @@ import { db } from '../db/index.js'
 import { requireScope } from '../middleware/token.js'
 import { ensureConnected } from '../wa/client.js'
 import { channelType, toJid } from '../util/jid.js'
+import { canonicalJidMap } from '../db/lidmap.js'
 
 export default async function channelRoutes(fastify) {
   fastify.get('/channels', {
@@ -48,8 +49,27 @@ export default async function channelRoutes(fastify) {
     }
 
     if (search) {
-      sql += ' AND (cm.display_name LIKE ? OR cm.jid LIKE ?)'
-      params.push(`%${search}%`, `%${search}%`)
+      // Match the partner address too. A DM lives under both a phone-number
+      // JID and an @lid one; matching only the row that literally contains the
+      // search text would drop the other half before the merge below, so the
+      // same chat would report different unread counts depending on whether
+      // you searched its number or its name.
+      sql += ` AND (
+        cm.display_name LIKE ?
+        OR cm.jid LIKE ?
+        OR EXISTS (
+          SELECT 1 FROM lid_map m
+          LEFT JOIN channel_meta partner
+            ON partner.jid = CASE WHEN m.lid = cm.jid THEN m.pn ELSE m.lid END
+          WHERE (m.lid = cm.jid OR m.pn = cm.jid)
+            AND (
+              (CASE WHEN m.lid = cm.jid THEN m.pn ELSE m.lid END) LIKE ?
+              OR partner.display_name LIKE ?
+            )
+        )
+      )`
+      const like = `%${search}%`
+      params.push(like, like, like, like)
     }
 
     sql += ` ORDER BY cm.priority DESC,
@@ -64,25 +84,51 @@ export default async function channelRoutes(fastify) {
 
     const rows = db.prepare(sql).all(...params)
 
-    // Resolve names via LID map for any unnamed channels
-    const resolveName = db.prepare(`
-      SELECT cm2.display_name FROM lid_map lm
-      JOIN channel_meta cm2 ON cm2.jid = lm.pn
-      WHERE lm.lid = ? AND cm2.display_name IS NOT NULL
-    `)
+    // One person, one row. WhatsApp files the same DM under a phone-number JID
+    // and a device-linked @lid one depending on which address the sender used,
+    // so without collapsing them a contact appears twice — typically an old
+    // thread under the number and a new one under the LID.
+    const canonical = canonicalJidMap(rows.map(r => r.jid))
+    const merged = new Map()
 
-    return rows.map(row => {
-      let displayName = row.display_name
-      if (!displayName && row.jid.endsWith('@lid')) {
-        const resolved = resolveName.get(row.jid)
-        if (resolved?.display_name) displayName = resolved.display_name
+    for (const row of rows) {
+      const key = canonical.get(row.jid) || row.jid
+      const lastMessage = row.last_message ? JSON.parse(row.last_message) : null
+      const existing = merged.get(key)
+
+      if (!existing) {
+        merged.set(key, {
+          ...row,
+          jid: key,
+          type: channelType(key),
+          display_name: row.display_name,
+          last_message: lastMessage,
+          unread_count: row.unread_count || 0,
+          alt_jids: row.jid === key ? [] : [row.jid],
+        })
+        continue
       }
-      return {
-        ...row,
-        type: channelType(row.jid),
-        display_name: displayName,
-        last_message: row.last_message ? JSON.parse(row.last_message) : null,
+
+      // A name on either address names the person.
+      if (!existing.display_name && row.display_name) existing.display_name = row.display_name
+      existing.unread_count += row.unread_count || 0
+      if (lastMessage && (!existing.last_message || lastMessage.timestamp > existing.last_message.timestamp)) {
+        existing.last_message = lastMessage
       }
+      if (row.jid !== key) existing.alt_jids.push(row.jid)
+      // Prefer real metadata over a placeholder row.
+      existing.tab_id = existing.tab_id ?? row.tab_id
+      existing.notes = existing.notes ?? row.notes
+      existing.is_muted = existing.is_muted || row.is_muted
+      existing.is_archived = existing.is_archived && row.is_archived
+    }
+
+    return [...merged.values()].sort((a, b) => {
+      if ((b.priority || 0) !== (a.priority || 0)) return (b.priority || 0) - (a.priority || 0)
+      const at = a.last_message?.timestamp || ''
+      const bt = b.last_message?.timestamp || ''
+      if (at !== bt) return bt.localeCompare(at)
+      return (a.display_name || a.jid).localeCompare(b.display_name || b.jid)
     })
   })
 

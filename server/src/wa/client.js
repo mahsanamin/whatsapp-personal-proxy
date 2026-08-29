@@ -1,15 +1,24 @@
 import makeWASocket, {
   useMultiFileAuthState,
+  makeCacheableSignalKeyStore,
   DisconnectReason,
+  Browsers,
   fetchLatestBaileysVersion,
   BufferJSON,
 } from '@whiskeysockets/baileys'
 import pino from 'pino'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import path from 'node:path'
+import { config } from '../config.js'
 import { db } from '../db/index.js'
 
 const MAX_RETRIES = 10
 let retries = 0
 let currentSock = null
+let sessionDir = config.waSessionPath
+let linkedCache = null
+
+const logger = pino({ level: 'warn' })
 
 export async function createWAClient(sessionPath, eventBus) {
   // Close existing socket to prevent duplicate listeners
@@ -18,18 +27,28 @@ export async function createWAClient(sessionPath, eventBus) {
     currentSock = null
   }
 
+  sessionDir = sessionPath
   const { state, saveCreds } = await useMultiFileAuthState(sessionPath)
-
-  // "Linked" means a phone has completed pairing, which is a different question
-  // from "connected". An unlinked server sits in `connecting` forever while it
-  // emits QR codes, so connection status alone cannot tell the two apart.
-  eventBus.waLinked = isRegistered(state.creds)
+  refreshLinked()
 
   const { version } = await fetchLatestBaileysVersion()
 
   const sock = makeWASocket({
     version,
-    auth: state,
+    auth: {
+      creds: state.creds,
+      // Signal key lookups hit the filesystem on every decrypt. Uncached they
+      // are slow enough that companion/peer messages fail to decrypt, which is
+      // what makes the phone report "Device out of sync".
+      keys: makeCacheableSignalKeyStore(state.keys, logger),
+    },
+    browser: Browsers.ubuntu('WPP'),
+    // The proxy is a secondary device. Marking it online steals push
+    // notifications from the phone, which is not what a personal proxy should do.
+    markOnlineOnConnect: false,
+    // The first connect runs init queries while a full history sync is still in
+    // flight; the 60s default times them out on an account with real history.
+    defaultQueryTimeoutMs: undefined,
     printQRInTerminal: false,
     syncFullHistory: true,
     mediaCache: undefined,
@@ -41,11 +60,14 @@ export async function createWAClient(sessionPath, eventBus) {
       }
       return undefined
     },
-    logger: pino({ level: 'warn' }),
+    logger,
   })
 
   currentSock = sock
-  sock.ev.on('creds.update', saveCreds)
+  sock.ev.on('creds.update', async () => {
+    await saveCreds()
+    refreshLinked()
+  })
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update
@@ -61,10 +83,20 @@ export async function createWAClient(sessionPath, eventBus) {
 
     if (connection === 'open') {
       retries = 0
-      eventBus.waLinked = true
+      linkedCache = true
       eventBus.lastQr = null
       eventBus.waStatus = 'open'
       eventBus.emit('wa.status', { status: 'open' })
+
+      // Repair any history that was ingested before the mapping fields above
+      // were read correctly.
+      try {
+        const { backfillLidMap } = await import('../db/lidmap.js')
+        const repaired = backfillLidMap()
+        if (repaired.mappings || repaired.names) {
+          logger.info({ repaired }, 'backfilled LID/phone-number mappings')
+        }
+      } catch (_) {}
 
       // Sync all groups into channel_meta on connect
       try {
@@ -110,8 +142,17 @@ export async function createWAClient(sessionPath, eventBus) {
       const isLoggedOut = code === DisconnectReason.loggedOut
       const isForbidden = code === DisconnectReason.forbidden
 
-      if (isLoggedOut || isForbidden) {
-        eventBus.waLinked = false
+      if (isLoggedOut) {
+        // The phone unlinked this device: the credentials are dead. Clear them
+        // so the console can offer a QR code again instead of insisting it is
+        // still linked.
+        clearSession()
+        eventBus.emit('wa.logged_out')
+        return
+      }
+
+      if (isForbidden) {
+        // Possibly temporary. Do not destroy working credentials over it.
         eventBus.emit('wa.logged_out')
         return
       }
@@ -199,18 +240,28 @@ export async function createWAClient(sessionPath, eventBus) {
     }
   }
 
-  // Extract LID-PN mapping from message keys
+  // Extract the LID/phone-number correspondence from a message key.
+  //
+  // Baileys 6.7.x carries the counterpart address on the key itself:
+  // senderPn/senderLid for direct chats, participantPn/participantLid inside
+  // groups. An earlier version of this code looked for remoteJidAlt and
+  // participantAlt, which this Baileys never emits — so lid_map stayed empty,
+  // names never propagated, and every contact appeared twice in the chat list,
+  // once per address.
   function extractMappingFromMessage(msg) {
     const key = msg.key
     if (!key) return
-    // DM: remoteJid is @lid, remoteJidAlt might be @s.whatsapp.net
-    if (key.remoteJid?.endsWith('@lid') && key.remoteJidAlt?.endsWith('@s.whatsapp.net')) {
-      storeLidMapping(key.remoteJid, key.remoteJidAlt)
-    }
-    // Group: participant is @lid, participantAlt might be @s.whatsapp.net
-    if (key.participant?.endsWith('@lid') && key.participantAlt?.endsWith('@s.whatsapp.net')) {
-      storeLidMapping(key.participant, key.participantAlt)
-    }
+
+    // Direct chat filed under the LID; the key names the phone number.
+    storeLidMapping(key.remoteJid, key.senderPn)
+    // Direct chat filed under the phone number; the key names the LID.
+    storeLidMapping(key.senderLid, key.remoteJid)
+    storeLidMapping(key.senderLid, key.senderPn)
+
+    // Inside a group the sender is the participant, addressed either way.
+    storeLidMapping(key.participant, key.participantPn)
+    storeLidMapping(key.participantLid, key.participant)
+    storeLidMapping(key.participantLid, key.participantPn)
   }
 
   // ─── Chat sync events ─────────────────────────────────────────────
@@ -457,17 +508,43 @@ function updateMessageStatus(update) {
   }
 }
 
-function isRegistered(creds) {
-  return Boolean(creds?.registered || creds?.me?.id)
+function refreshLinked() {
+  try {
+    const credsPath = path.join(sessionDir, 'creds.json')
+    if (!existsSync(credsPath)) {
+      linkedCache = false
+      return linkedCache
+    }
+    const creds = JSON.parse(readFileSync(credsPath, 'utf8'))
+    linkedCache = Boolean(creds?.registered || creds?.me?.id)
+  } catch (_) {
+    linkedCache = false
+  }
+  return linkedCache
+}
+
+/** Delete the stored WhatsApp credentials so a fresh pairing can start. */
+export function clearSession() {
+  try {
+    rmSync(sessionDir, { recursive: true, force: true })
+    mkdirSync(sessionDir, { recursive: true })
+  } catch (_) {}
+  linkedCache = false
 }
 
 export function getSock() {
   return currentSock
 }
 
-/** Has a phone completed pairing? Distinct from whether the socket is up. */
+/**
+ * Has a phone completed pairing? Deliberately read from the credentials on
+ * disk, not from the live socket: pairing is always followed by a mandatory
+ * restart (stream error 515) during which there is no socket at all, and
+ * deriving this from the socket made a freshly linked account look unlinked
+ * and bounced the user back to the QR page mid-sync.
+ */
 export function isLinked() {
-  return isRegistered(currentSock?.authState?.creds)
+  return linkedCache ?? refreshLinked()
 }
 
 export function ensureConnected() {
