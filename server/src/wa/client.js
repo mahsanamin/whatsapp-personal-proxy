@@ -19,6 +19,12 @@ export async function createWAClient(sessionPath, eventBus) {
   }
 
   const { state, saveCreds } = await useMultiFileAuthState(sessionPath)
+
+  // "Linked" means a phone has completed pairing, which is a different question
+  // from "connected". An unlinked server sits in `connecting` forever while it
+  // emits QR codes, so connection status alone cannot tell the two apart.
+  eventBus.waLinked = isRegistered(state.creds)
+
   const { version } = await fetchLatestBaileysVersion()
 
   const sock = makeWASocket({
@@ -55,6 +61,7 @@ export async function createWAClient(sessionPath, eventBus) {
 
     if (connection === 'open') {
       retries = 0
+      eventBus.waLinked = true
       eventBus.lastQr = null
       eventBus.waStatus = 'open'
       eventBus.emit('wa.status', { status: 'open' })
@@ -104,6 +111,7 @@ export async function createWAClient(sessionPath, eventBus) {
       const isForbidden = code === DisconnectReason.forbidden
 
       if (isLoggedOut || isForbidden) {
+        eventBus.waLinked = false
         eventBus.emit('wa.logged_out')
         return
       }
@@ -449,8 +457,17 @@ function updateMessageStatus(update) {
   }
 }
 
+function isRegistered(creds) {
+  return Boolean(creds?.registered || creds?.me?.id)
+}
+
 export function getSock() {
   return currentSock
+}
+
+/** Has a phone completed pairing? Distinct from whether the socket is up. */
+export function isLinked() {
+  return isRegistered(currentSock?.authState?.creds)
 }
 
 export function ensureConnected() {

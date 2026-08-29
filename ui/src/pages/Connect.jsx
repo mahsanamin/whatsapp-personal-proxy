@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 
@@ -7,71 +7,68 @@ export default function Connect() {
   const [qr, setQr] = useState(null)
   const [status, setStatus] = useState('checking') // checking | waiting | scan | expired | linking
   const [refreshing, setRefreshing] = useState(false)
-  const hadQr = useRef(false)
-  const linking = useRef(false)
+  const [autoTries, setAutoTries] = useState(0)
 
   const refreshQr = async () => {
     setRefreshing(true)
     setQr(null)
     setStatus('waiting')
-    hadQr.current = false
-    linking.current = false
     try {
       await api('/auth/wa/refresh-qr', { method: 'POST' })
     } catch (_) {}
     setTimeout(() => setRefreshing(false), 3000)
   }
 
+  // WhatsApp emits QR codes in bursts with quiet gaps of up to a minute in
+  // between, and the server hides a code once it is too stale to scan. Asking
+  // for a fresh one takes about four seconds, so do it automatically rather
+  // than leave the user looking at "expired". Capped, so an unreachable
+  // WhatsApp does not reconnect in a loop.
+  const AUTO_REFRESH_LIMIT = 5
   useEffect(() => {
-    const poll = setInterval(() => {
-      api('/auth/wa/status').then(data => {
-        // Already connected — go to workspace
-        if (data.status === 'open') {
-          clearInterval(poll)
-          navigate('/')
-          return
-        }
+    if (status !== 'expired' || refreshing || autoTries >= AUTO_REFRESH_LIMIT) return
+    const timer = setTimeout(() => {
+      setAutoTries(n => n + 1)
+      refreshQr()
+    }, 3000)
+    return () => clearTimeout(timer)
+  }, [status, refreshing, autoTries])
 
-        // If we're in "linking" state, stay there until open
-        if (linking.current) return
-
-        // QR was scanned — user had a QR, now it's gone
-        if (hadQr.current && !data.qr) {
-          linking.current = true
-          setStatus('linking')
-          setQr(null)
-          // Navigate to workspace after short delay — let it show sync screen
-          setTimeout(() => navigate('/'), 3000)
-          return
-        }
-
-        // Fresh QR available
-        if (data.qr) {
-          setQr(data.qr)
-          setStatus('scan')
-          hadQr.current = true
-          setRefreshing(false)
-        } else if (!hadQr.current) {
-          // No QR yet and never had one
-          if (!refreshing) setStatus('expired')
-        }
-      }).catch(() => {})
-    }, 1500)
-
-    // Immediate check
-    api('/auth/wa/status').then(data => {
-      if (data.status === 'open') { navigate('/'); return }
+  useEffect(() => {
+    // `linked` is authoritative. The QR vanishing is not: the server nulls a
+    // stale code after 25s, so a rotation gap used to look like a successful
+    // scan and threw the user into an empty workspace.
+    const apply = (data) => {
+      if (data.status === 'open') {
+        navigate('/')
+        return true
+      }
+      if (data.linked) {
+        setStatus('linking')
+        setQr(null)
+        return false
+      }
       if (data.qr) {
         setQr(data.qr)
         setStatus('scan')
-        hadQr.current = true
+        setRefreshing(false)
       } else {
-        setStatus('expired')
+        setQr(null)
+        if (!refreshing) setStatus('expired')
       }
-    }).catch(() => {})
+      return false
+    }
+
+    const poll = setInterval(() => {
+      api('/auth/wa/status')
+        .then(data => { if (apply(data)) clearInterval(poll) })
+        .catch(() => {})
+    }, 1500)
+
+    api('/auth/wa/status').then(apply).catch(() => {})
 
     return () => clearInterval(poll)
-  }, [navigate])
+  }, [navigate, refreshing])
 
   return (
     <div className="flex flex-col items-center justify-center h-screen bg-bg">
@@ -147,10 +144,12 @@ export default function Connect() {
                   </svg>
                 </div>
                 <p className="text-neutral-400 text-sm">
-                  {status === 'expired' ? 'QR code expired or not available' : 'Preparing...'}
+                  {status !== 'expired' ? 'Preparing...'
+                    : autoTries >= AUTO_REFRESH_LIMIT ? 'Could not reach WhatsApp. Try again?'
+                    : 'Waiting for a fresh QR code...'}
                 </p>
                 <button
-                  onClick={refreshQr}
+                  onClick={() => { setAutoTries(0); refreshQr() }}
                   className="bg-accent hover:bg-emerald-400 text-black px-5 py-2.5 rounded-lg text-sm font-medium transition-all"
                 >
                   Generate QR Code

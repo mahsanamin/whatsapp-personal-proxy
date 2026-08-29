@@ -334,6 +334,7 @@ export default function Workspace({ onLogout }) {
   const [messages, setMessages] = useState([])
   const [msgInput, setMsgInput] = useState('')
   const [waStatus, setWaStatus] = useState('close')
+  const [waLinked, setWaLinked] = useState(true)
   const [search, setSearch] = useState('')
   const [sendError, setSendError] = useState(null)
   const [syncStats, setSyncStats] = useState({ channels: 0, messages: 0 })
@@ -371,8 +372,12 @@ export default function Workspace({ onLogout }) {
   useEffect(() => {
     api('/auth/wa/status').then(data => {
       setWaStatus(data.status)
-      // Only redirect to connect if WA is fully disconnected with no ongoing activity
-      if (data.status === 'close' && !data.qr && channels.length === 0) navigate('/connect')
+      setWaLinked(Boolean(data.linked))
+      // No account paired yet — there is nothing to sync, so send the user to
+      // scan a QR. An unlinked server sits in `connecting` while it emits QR
+      // codes, so checking the status alone would strand them on a sync screen
+      // that never finishes.
+      if (!data.linked) navigate('/connect')
     }).catch(() => navigate('/login'))
     loadTabs()
     // After 30s, stop showing loading even if no channels arrived
@@ -473,7 +478,7 @@ export default function Workspace({ onLogout }) {
             <div className="flex items-center gap-1.5 bg-yellow-950/60 border border-yellow-900/40 rounded-full px-2.5 py-1">
               <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 animate-pulse" />
               <span className="text-yellow-400 text-[11px]">
-                {waStatus === 'connecting' ? 'Syncing...' : 'Disconnected'}
+                {!waLinked ? 'Not linked' : waStatus === 'connecting' ? 'Syncing...' : 'Disconnected'}
               </span>
             </div>
           )}
@@ -601,7 +606,7 @@ export default function Workspace({ onLogout }) {
             </>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center gap-4">
-              {initialLoad && waStatus !== 'open' ? (
+              {initialLoad && waStatus !== 'open' && waLinked ? (
                 <>
                   {/* Sync progress screen */}
                   <div className="w-16 h-16 rounded-2xl bg-accent/10 flex items-center justify-center">

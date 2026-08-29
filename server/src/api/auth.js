@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import { config } from '../config.js'
 import { identifyCaller } from '../middleware/token.js'
-import { getSock } from '../wa/client.js'
+import { getSock, isLinked } from '../wa/client.js'
 
 function constantTimeEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false
@@ -51,6 +51,7 @@ export default async function authRoutes(fastify) {
       },
       wa: {
         status: fastify.eventBus.waStatus || 'close',
+        linked: isLinked() || Boolean(fastify.eventBus.waLinked),
         user: sock?.user ? { id: sock.user.id, name: sock.user.name ?? null } : null,
       },
       server: {
@@ -75,6 +76,10 @@ export default async function authRoutes(fastify) {
     const qrFresh = qrAge !== null && qrAge < 25
     return {
       status: eventBus.waStatus || 'close',
+      // Whether a phone has ever completed pairing. `status` alone cannot tell
+      // "never linked, waiting to be scanned" from "linked, reconnecting" —
+      // both sit in `connecting`.
+      linked: isLinked() || Boolean(eventBus.waLinked),
       qr: qrFresh ? eventBus.lastQr : null,
       qr_age: qrAge,
     }

@@ -8,14 +8,20 @@ import { api } from './api/client'
 
 export default function App() {
   const [authed, setAuthed] = useState(null) // null = loading
+  const [linked, setLinked] = useState(null) // null = not yet known
+
+  const checkLink = () =>
+    api('/auth/wa/status')
+      .then(data => setLinked(Boolean(data.linked)))
+      .catch(() => setLinked(null))
 
   useEffect(() => {
     api('/tokens')
-      .then(() => setAuthed(true))
+      .then(() => { setAuthed(true); return checkLink() })
       .catch(() => setAuthed(false))
   }, [])
 
-  const handleLogin = () => setAuthed(true)
+  const handleLogin = () => { setAuthed(true); checkLink() }
 
   const handleLogout = () => {
     api('/auth/logout', { method: 'POST' }).catch(() => {})
@@ -36,7 +42,16 @@ export default function App() {
         <Route path="/login" element={authed ? <Navigate to="/" /> : <Login onLogin={handleLogin} />} />
         <Route path="/connect" element={!authed ? <Navigate to="/login" /> : <Connect />} />
         <Route path="/tokens" element={!authed ? <Navigate to="/login" /> : <Tokens onLogout={handleLogout} />} />
-        <Route path="/" element={!authed ? <Navigate to="/login" /> : <Workspace onLogout={handleLogout} />} />
+        {/* Nothing to show in the workspace until a phone is paired, so send a
+            fresh install straight to the QR page instead of an endless sync. */}
+        <Route
+          path="/"
+          element={
+            !authed ? <Navigate to="/login" />
+              : linked === false ? <Navigate to="/connect" />
+              : <Workspace onLogout={handleLogout} />
+          }
+        />
       </Routes>
     </BrowserRouter>
   )

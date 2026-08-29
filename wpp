@@ -313,10 +313,11 @@ def cmd_status(args):
         "whatsapp": wa,
         "server": auth.get("server", {}),
     }
-    if wa.get("status") != "open":
-        data["next"] = "WhatsApp is not linked. Open %s in a browser and scan the QR code." % (
-            auth.get("server", {}).get("public_url") or profile["url"]
-        )
+    console = auth.get("server", {}).get("public_url") or profile["url"]
+    if not wa.get("linked"):
+        data["next"] = "No WhatsApp account is linked. Open %s and scan the QR code." % console
+    elif wa.get("status") != "open":
+        data["next"] = "WhatsApp is linked but not connected right now (status: %s)." % wa.get("status")
     return ok(data)
 
 
