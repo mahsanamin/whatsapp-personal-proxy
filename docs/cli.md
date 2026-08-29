@@ -52,6 +52,25 @@ Non-interactive setups can pipe the token instead of typing it:
 echo "$WPP_TOKEN" | wpp connect http://SERVER:3300 --token-stdin
 ```
 
+## Catching up
+
+```bash
+wpp brief                       # everything unread, ranked, with previews
+wpp brief --dms-only --count 5
+wpp brief --since 2026-08-29T09:00:00Z
+wpp read "Family"               # mark read so the next brief skips it
+```
+
+`brief` is one round trip and is the right first command of a session. Chats are
+ranked by messages that @mention you, then replies to something you sent, then
+DMs, then group volume; muted chats sink.
+
+Unread is tracked here, not by WhatsApp — everything newer than a chat's
+`last_read_at`. If nothing marks a chat read it stays unread forever, so use
+`wpp read` (or `wpp history --mark-read`) once you have dealt with it.
+
+For the full agent-facing contract, see [`llm-reference.md`](llm-reference.md).
+
 ## Checking the link
 
 ```bash

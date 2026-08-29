@@ -162,6 +162,53 @@ def bool_text(value):
     return "true" if value else "false"
 
 
+def compact_message(m):
+    """Trim a message to what a reader actually needs.
+
+    The stored row carries media keys, sha256s, mime types and internal ids.
+    An LLM pays for every one of those tokens and can act on none of them, so
+    the default shape is lean and --verbose returns the row untouched.
+    """
+    out = {
+        "at": m.get("timestamp"),
+        "from": ("you" if m.get("is_from_me") else (m.get("from_name") or (m.get("from_jid") or "").split("@")[0])),
+        "text": m.get("body") or "",
+    }
+    if m.get("type") and m["type"] != "text":
+        out["type"] = m["type"]
+        if not out["text"]:
+            out["text"] = "[%s]" % m["type"]
+    if m.get("mentions_me"):
+        out["mentions_you"] = True
+    if m.get("quoted_id"):
+        out["reply_to"] = m["quoted_id"]
+    if m.get("reactions"):
+        out["reactions"] = [r.get("emoji") for r in m["reactions"]]
+    if m.get("media_saved"):
+        out["media_saved"] = True
+    if m.get("id"):
+        out["id"] = m["id"]
+    return out
+
+
+def compact_chat(c):
+    out = {
+        "jid": c.get("jid"),
+        "name": c.get("display_name") or (c.get("jid") or "").split("@")[0],
+        "type": c.get("type"),
+    }
+    if c.get("unread_count"):
+        out["unread"] = c["unread_count"]
+    if c.get("unread_mentions"):
+        out["mentions_you"] = c["unread_mentions"]
+    last = c.get("last_message")
+    if last:
+        out["last"] = {"at": last.get("timestamp"), "text": last.get("body") or ("[%s]" % last.get("type"))}
+    if c.get("is_muted"):
+        out["muted"] = True
+    return out
+
+
 def require_confirmation(args, action):
     if getattr(args, "yes", False):
         return
@@ -462,6 +509,25 @@ def run_api_command(args, profile, pretty):
     if command == "auth":
         return ok(api_call(profile, "GET", "/api/auth/test"))
 
+    if command == "brief":
+        data = api_call(profile, "GET", "/api/brief", {
+            "limit": args.count,
+            "messages": args.messages,
+            "since": args.since,
+            "groups": bool_text(not args.dms_only),
+            "muted": bool_text(args.include_muted),
+        })
+        return ok(data, meta={"source_calls": 1})
+
+    if command == "read":
+        resolved = resolve_target(profile, args.target)
+        result = api_call(
+            profile, "POST",
+            "/api/channels/%s/read" % parse.quote(resolved["jid"], safe=""),
+            body={"up_to": args.up_to} if args.up_to else {},
+        )
+        return ok({"chat": resolved, **result})
+
     if command == "chats":
         chats = api_call(profile, "GET", "/api/channels", {
             "type": args.type if args.type != "all" else None,
@@ -469,6 +535,8 @@ def run_api_command(args, profile, pretty):
             "limit": args.count,
             "archived": bool_text(False) if args.no_archived else None,
         })
+        if not args.verbose:
+            chats = [compact_chat(c) for c in chats]
         return ok({"chats": chats}, meta={"count": len(chats)})
 
     if command == "groups":
@@ -494,14 +562,25 @@ def run_api_command(args, profile, pretty):
             {"limit": args.count, "after": args.after, "before": args.before, "type": args.type},
         )
         messages.reverse()  # oldest first reads like a transcript
-        return ok({"chat": resolved, "messages": messages}, meta={"count": len(messages)})
+        count = len(messages)
+        if not args.verbose:
+            messages = [compact_message(m) for m in messages]
+        if args.mark_read:
+            api_call(profile, "POST", "/api/channels/%s/read" % parse.quote(resolved["jid"], safe=""), body={})
+        return ok({"chat": resolved, "messages": messages}, meta={"count": count})
 
     if command == "search":
         jid = resolve_target(profile, args.chat)["jid"] if args.chat else None
         messages = api_call(profile, "GET", "/api/messages/search", {
             "q": args.query, "limit": args.count, "jid": jid, "type": args.type,
         })
-        return ok({"messages": messages}, meta={"count": len(messages)})
+        count = len(messages)
+        if not args.verbose:
+            messages = [
+                {**compact_message(m), "chat": m.get("channel_name") or m.get("jid")}
+                for m in messages
+            ]
+        return ok({"messages": messages}, meta={"count": count})
 
     if command == "whitelist":
         if args.whitelist_action == "list":
@@ -601,11 +680,26 @@ def build_parser():
     sub.add_parser("health", help="Server health (no authentication)")
     sub.add_parser("auth", help="Show the credential's identity and scopes")
 
+    p = sub.add_parser(
+        "brief",
+        help="What needs your attention: unread, ranked, with previews. Best first call",
+    )
+    p.add_argument("--count", type=bounded_int(1, 50), default=15, help="Chats to include")
+    p.add_argument("--messages", type=bounded_int(1, 20), default=5, help="Messages per chat")
+    p.add_argument("--since", help="ISO timestamp; only activity after it")
+    p.add_argument("--dms-only", action="store_true", help="Skip group chats")
+    p.add_argument("--include-muted", action="store_true")
+
+    p = sub.add_parser("read", help="Mark a chat read, so the next brief excludes it")
+    p.add_argument("target", help="Number, JID, or chat name")
+    p.add_argument("--up-to", help="ISO timestamp; mark read only up to here")
+
     p = sub.add_parser("chats", help="List chats (DMs, groups, channels)")
     p.add_argument("--type", choices=("all", "dm", "group", "channel"), default="all")
     p.add_argument("--search", help="Filter by name or JID")
     p.add_argument("--count", type=bounded_int(1, 1000), default=50)
     p.add_argument("--no-archived", action="store_true", help="Hide archived chats")
+    p.add_argument("--verbose", action="store_true", help="Full records instead of the compact shape")
 
     p = sub.add_parser("groups", help="List groups")
     p.add_argument("--search")
@@ -624,12 +718,15 @@ def build_parser():
     p.add_argument("--after", help="ISO timestamp; only messages newer than this")
     p.add_argument("--before", help="ISO timestamp; only messages older than this")
     p.add_argument("--type", help="Filter by message type (text, image, video, doc, audio)")
+    p.add_argument("--mark-read", action="store_true", help="Mark the chat read after reading it")
+    p.add_argument("--verbose", action="store_true", help="Full records instead of the compact shape")
 
     p = sub.add_parser("search", help="Search stored message bodies")
     p.add_argument("query")
     p.add_argument("--chat", help="Restrict to one chat")
     p.add_argument("--count", type=bounded_int(1, 200), default=50)
     p.add_argument("--type", help="Filter by message type")
+    p.add_argument("--verbose", action="store_true", help="Full records instead of the compact shape")
 
     p = sub.add_parser("send", help="Send a message to a personal number, a whitelisted DM, or a group")
     p.add_argument("target", help="Number, JID, or chat name")

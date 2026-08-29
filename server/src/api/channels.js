@@ -2,7 +2,7 @@ import { db } from '../db/index.js'
 import { requireScope } from '../middleware/token.js'
 import { ensureConnected } from '../wa/client.js'
 import { channelType, toJid } from '../util/jid.js'
-import { canonicalJidMap } from '../db/lidmap.js'
+import { canonicalJidMap, expandJids } from '../db/lidmap.js'
 
 export default async function channelRoutes(fastify) {
   fastify.get('/channels', {
@@ -19,7 +19,12 @@ export default async function channelRoutes(fastify) {
         cm.is_archived,
         cm.priority,
         cm.notes,
-        (SELECT COUNT(*) FROM messages m WHERE m.jid = cm.jid AND m.status != 'read' AND m.is_from_me = 0) AS unread_count,
+        (SELECT COUNT(*) FROM messages m
+          WHERE m.jid = cm.jid AND m.is_from_me = 0
+            AND (cm.last_read_at IS NULL OR m.timestamp > cm.last_read_at)) AS unread_count,
+        (SELECT COUNT(*) FROM messages m
+          WHERE m.jid = cm.jid AND m.is_from_me = 0 AND m.mentions_me = 1
+            AND (cm.last_read_at IS NULL OR m.timestamp > cm.last_read_at)) AS unread_mentions,
         (SELECT json_object(
           'body', m2.body,
           'timestamp', m2.timestamp,
@@ -104,6 +109,7 @@ export default async function channelRoutes(fastify) {
           display_name: row.display_name,
           last_message: lastMessage,
           unread_count: row.unread_count || 0,
+          unread_mentions: row.unread_mentions || 0,
           alt_jids: row.jid === key ? [] : [row.jid],
         })
         continue
@@ -112,6 +118,7 @@ export default async function channelRoutes(fastify) {
       // A name on either address names the person.
       if (!existing.display_name && row.display_name) existing.display_name = row.display_name
       existing.unread_count += row.unread_count || 0
+      existing.unread_mentions += row.unread_mentions || 0
       if (lastMessage && (!existing.last_message || lastMessage.timestamp > existing.last_message.timestamp)) {
         existing.last_message = lastMessage
       }
@@ -188,6 +195,32 @@ export default async function channelRoutes(fastify) {
     ).get(jid)
 
     return { ...channel, type: channelType(jid), last_message: lastMessage || null }
+  })
+
+  // Mark a conversation read. WhatsApp does not tell us when the owner reads
+  // something, so this is the only thing that makes "unread" mean anything.
+  fastify.post('/channels/:jid/read', {
+    preHandler: requireScope('channels:read'),
+  }, async (request, reply) => {
+    const requested = toJid(request.params.jid) || request.params.jid
+    const jids = expandJids(requested)
+    const upTo = request.body?.up_to || new Date().toISOString()
+
+    const stmt = db.prepare(`
+      INSERT INTO channel_meta (jid, last_read_at) VALUES (?, ?)
+      ON CONFLICT(jid) DO UPDATE SET last_read_at = excluded.last_read_at
+    `)
+    const apply = db.transaction(() => {
+      for (const jid of jids) stmt.run(jid, upTo)
+    })
+    apply()
+
+    const remaining = db.prepare(
+      `SELECT COUNT(*) AS c FROM messages
+       WHERE jid IN (${jids.map(() => '?').join(',')}) AND is_from_me = 0 AND timestamp > ?`
+    ).get(...jids, upTo).c
+
+    return { ok: true, jid: requested, read_up_to: upTo, unread_count: remaining }
   })
 
   fastify.patch('/channels/:jid', {

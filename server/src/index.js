@@ -23,6 +23,7 @@ import tabRoutes from './api/tabs.js'
 import whitelistRoutes from './api/whitelist.js'
 import cliRoutes from './api/cli.js'
 import eventRoutes from './api/events.js'
+import briefRoutes from './api/brief.js'
 import wsRoutes from './ws/index.js'
 
 const fastify = Fastify({
@@ -89,6 +90,7 @@ await fastify.register(tabRoutes)
 await fastify.register(whitelistRoutes)
 await fastify.register(cliRoutes)
 await fastify.register(eventRoutes)
+await fastify.register(briefRoutes)
 await fastify.register(wsRoutes)
 
 // Force resolve unnamed contacts and groups.

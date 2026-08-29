@@ -1,3 +1,10 @@
+/** Add a column only if it is missing, so migrations stay idempotent. */
+function addColumn(db, table, column, definition) {
+  const existing = db.prepare(`PRAGMA table_info(${table})`).all()
+  if (existing.some(c => c.name === column)) return
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
+}
+
 export function runMigrations(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS tokens (
@@ -78,5 +85,21 @@ export function runMigrations(db) {
       expires_at  INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+  `)
+
+  // Read state. Incoming messages are stored with status 'sent' and WhatsApp
+  // never tells us the owner read them, so "unread" has to be tracked here:
+  // anything newer than last_read_at is unread. Without this, unread_count is
+  // simply every message the contact has ever sent.
+  addColumn(db, 'channel_meta', 'last_read_at', 'DATETIME')
+
+  // Whether a message @-mentions the owner. Computed at ingest from the
+  // message's contextInfo, because parsing raw_json per query is far too slow
+  // to do across a whole mailbox.
+  addColumn(db, 'messages', 'mentions_me', 'INTEGER DEFAULT 0')
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_messages_mentions ON messages(mentions_me) WHERE mentions_me = 1;
+    CREATE INDEX IF NOT EXISTS idx_messages_quoted   ON messages(quoted_id);
   `)
 }

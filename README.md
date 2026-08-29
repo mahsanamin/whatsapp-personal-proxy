@@ -105,6 +105,7 @@ wpp connect http://YOUR-SERVER:3300        # paste the key at the hidden prompt
 `~/.config/wpp/config.json` with mode `0600`. Then:
 
 ```bash
+wpp brief                               # what needs my attention?
 wpp chats --type group                  # what can I see?
 wpp history "Family" --count 50         # read a group
 wpp history +15555550100 --count 50     # read a DM
@@ -273,6 +274,7 @@ impersonate your WhatsApp account on a fresh install.
 | Doc | Covers |
 |---|---|
 | [`docs/cli.md`](docs/cli.md) | Installing and using `wpp` on another machine |
+| [`docs/llm-reference.md`](docs/llm-reference.md) | The agent-facing contract — point an LLM at this |
 | [`docs/endpoints.md`](docs/endpoints.md) | Every route, its auth, and its scope |
 | [`docs/architecture.md`](docs/architecture.md) | How the pieces fit, and the LID/PN quirk |
 | [`docs/configuration.md`](docs/configuration.md) | Every `.env` knob |

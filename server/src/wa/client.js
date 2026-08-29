@@ -19,6 +19,37 @@ let currentSock = null
 let sessionDir = config.waSessionPath
 let linkedCache = null
 
+// Every address that means "the owner". A mention can name the phone-number
+// JID or the @lid one, and PERSONAL_NUMBERS covers a second handset.
+let myJids = new Set()
+
+function rememberMyJids(creds) {
+  const found = new Set()
+  for (const value of [creds?.me?.id, creds?.me?.lid]) {
+    if (typeof value === 'string' && value) found.add(value.split(':')[0].split('@')[0])
+  }
+  for (const number of config.personalNumbers) {
+    found.add(String(number).replace(/\D/g, ''))
+  }
+  myJids = found
+}
+
+function mentionsMe(message) {
+  const contexts = [
+    message?.extendedTextMessage?.contextInfo,
+    message?.imageMessage?.contextInfo,
+    message?.videoMessage?.contextInfo,
+    message?.documentMessage?.contextInfo,
+    message?.audioMessage?.contextInfo,
+  ]
+  for (const context of contexts) {
+    for (const jid of (context?.mentionedJid || [])) {
+      if (myJids.has(String(jid).split(':')[0].split('@')[0])) return true
+    }
+  }
+  return false
+}
+
 const logger = pino({ level: 'warn' })
 
 export async function createWAClient(sessionPath, eventBus) {
@@ -31,6 +62,7 @@ export async function createWAClient(sessionPath, eventBus) {
   sessionDir = sessionPath
   const { state, saveCreds } = await useMultiFileAuthState(sessionPath)
   refreshLinked()
+  rememberMyJids(state.creds)
 
   const { version } = await fetchLatestBaileysVersion()
 
@@ -68,6 +100,7 @@ export async function createWAClient(sessionPath, eventBus) {
   sock.ev.on('creds.update', async () => {
     await saveCreds()
     refreshLinked()
+    rememberMyJids(state.creds)
   })
 
   sock.ev.on('connection.update', async (update) => {
@@ -465,6 +498,7 @@ function normalizeMessage(raw) {
   }
 
   const quotedId = msg.reactionMessage?.key?.id || msg.extendedTextMessage?.contextInfo?.stanzaId || null
+  const mentioned = key.fromMe ? 0 : (mentionsMe(msg) ? 1 : 0)
   const timestamp = typeof raw.messageTimestamp === 'number'
     ? new Date(raw.messageTimestamp * 1000).toISOString()
     : new Date().toISOString()
@@ -484,6 +518,7 @@ function normalizeMessage(raw) {
     is_from_me: key.fromMe ? 1 : 0,
     status: 'sent',
     quoted_id: quotedId,
+    mentions_me: mentioned,
     raw_json: JSON.stringify(raw, BufferJSON.replacer),
   }
 }
@@ -491,12 +526,12 @@ function normalizeMessage(raw) {
 function saveMessage(msg) {
   db.prepare(`
     INSERT OR REPLACE INTO messages
-    (id, jid, from_jid, body, type, media_mime, media_size, media_sha256, media_key, media_url, timestamp, is_from_me, status, quoted_id, raw_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (id, jid, from_jid, body, type, media_mime, media_size, media_sha256, media_key, media_url, timestamp, is_from_me, status, quoted_id, mentions_me, raw_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     msg.id, msg.jid, msg.from_jid, msg.body, msg.type,
     msg.media_mime, msg.media_size, msg.media_sha256, msg.media_key, msg.media_url,
-    msg.timestamp, msg.is_from_me, msg.status, msg.quoted_id, msg.raw_json,
+    msg.timestamp, msg.is_from_me, msg.status, msg.quoted_id, msg.mentions_me ?? 0, msg.raw_json,
   )
 
   // Upsert channel_meta for DMs
