@@ -98,8 +98,14 @@ All three are rate limited by `RATE_LIMIT_SEND`.
 |---|---|---|---|
 | `POST` | `/api/personal/send` | `personal:send` | `{ to, message }` — `to` must be in `PERSONAL_NUMBERS` |
 | `POST` | `/api/others/send` | `others:send` | `{ to, message }` — `to` must be whitelisted |
-| `POST` | `/api/groups/send` | `groups:send` | `{ jid, message }` — `jid` must end in `@g.us` |
-| `POST` | `/api/send` | session | `{ jid, message }` — console only, no whitelist check |
+| `POST` | `/api/groups/send` | `groups:send` | `{ jid, message }` — `jid` must end in `@g.us` **and be on the allow list** |
+| `POST` | `/api/send` | session | `{ jid, message }` — console only, reaches any JID. Never exposed to a token under any scope |
+
+**Who may message whom.** The console holds a session and may message anyone.
+An API key may only reach `PERSONAL_NUMBERS` plus the entries on the allow list
+(`/api/whitelist`, managed in the console under **Allow list**). This applies to
+groups as well as DMs: a key with `groups:send` can only message groups that
+were explicitly allowed.
 
 ## Whitelist
 

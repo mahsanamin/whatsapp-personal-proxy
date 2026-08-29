@@ -71,6 +71,7 @@ export default function Tokens() {
               </svg>
             </Link>
             <h1 className="text-base font-semibold text-neutral-200">API Keys</h1>
+            <Link to="/whitelist" className="text-xs text-neutral-500 hover:text-accent transition-colors ml-2">Allow list</Link>
           </div>
           <button
             onClick={() => { setShowCreate(!showCreate); setNewToken(null) }}

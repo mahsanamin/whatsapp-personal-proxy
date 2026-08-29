@@ -100,8 +100,14 @@ wpp send "Family" --text-stdin < message.txt
 ```
 
 `send` picks the endpoint for you: groups go to `/api/groups/send`, your own numbers to
-`/api/personal/send`, everyone else to `/api/others/send` (which requires the recipient to
-be whitelisted). Force one with `--route personal|others|group`.
+`/api/personal/send`, everyone else to `/api/others/send`. Force one with
+`--route personal|others|group`.
+
+**The CLI can only message allowed destinations.** A token reaches your own
+`PERSONAL_NUMBERS` plus whatever is on the allow list — people *and* groups alike. Anything
+else comes back `NOT_WHITELISTED`. Manage the list in the web console under **Allow list**,
+or with `wpp whitelist` below. The console itself is not restricted this way: from the
+browser you can message anyone.
 
 Agents should use `--yes` only after the user has authorized that exact message and
 recipient. For multiline or shell-sensitive text, use `--text-stdin`.

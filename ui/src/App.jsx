@@ -4,6 +4,7 @@ import Login from './pages/Login'
 import Connect from './pages/Connect'
 import Workspace from './pages/Workspace'
 import Tokens from './pages/Tokens'
+import Whitelist from './pages/Whitelist'
 import { api } from './api/client'
 
 export default function App() {
@@ -42,6 +43,7 @@ export default function App() {
         <Route path="/login" element={authed ? <Navigate to="/" /> : <Login onLogin={handleLogin} />} />
         <Route path="/connect" element={!authed ? <Navigate to="/login" /> : <Connect />} />
         <Route path="/tokens" element={!authed ? <Navigate to="/login" /> : <Tokens onLogout={handleLogout} />} />
+        <Route path="/whitelist" element={!authed ? <Navigate to="/login" /> : <Whitelist />} />
         {/* Nothing to show in the workspace until a phone is paired, so send a
             fresh install straight to the QR page instead of an endless sync. */}
         <Route

@@ -18,10 +18,10 @@ export default async function whitelistRoutes(fastify) {
       return reply.code(400).send({ error: 'JID required', code: 'BAD_INPUT' })
     }
 
-    // Normalize: accept +971... or raw JID
+    // Accept +971..., a phone-number JID, or a group JID (…@g.us).
     const normalizedJid = jid.includes('@')
-      ? jid
-      : jid.replace(/^\+/, '') + '@s.whatsapp.net'
+      ? jid.trim()
+      : jid.trim().replace(/^\+/, '') + '@s.whatsapp.net'
 
     const id = nanoid()
 

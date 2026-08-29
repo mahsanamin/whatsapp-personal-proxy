@@ -36,6 +36,12 @@ Valid scopes: `personal:send`, `others:send`, `others:whitelist:read`,
 Tokens are SHA-256 hashed at rest, `sk_` prefix, shown once at creation. Admin password
 comparison is constant-time via `crypto.timingSafeEqual`.
 
+**Send permissions are two-tier and must stay that way.** The console may message anyone
+(`POST /send`, session-only). An API key may reach only `PERSONAL_NUMBERS` and the allow
+list — DMs via `/others/send` and groups via `/groups/send`, both of which check the
+`whitelist` table and exempt an authenticated session. A new send route inherits this
+obligation; `server/tests/permissions.test.js` pins it.
+
 ## Key conventions
 
 - All server and UI source is ESM (`"type": "module"`).

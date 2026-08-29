@@ -554,6 +554,7 @@ export default function Workspace({ onLogout }) {
               Link Device
             </Link>
           )}
+          <Link to="/whitelist" className="text-xs text-neutral-500 hover:text-accent transition-colors px-2 py-1 rounded hover:bg-neutral-800" title="Who API keys may message">Allow list</Link>
           <Link to="/tokens" className="text-xs text-neutral-500 hover:text-accent transition-colors px-2 py-1 rounded hover:bg-neutral-800">
             API Keys
           </Link>
