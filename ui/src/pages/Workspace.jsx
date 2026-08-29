@@ -76,6 +76,54 @@ function ChannelRow({ channel, active, onClick, onDragStart }) {
   )
 }
 
+function MediaBlock({ msg, label }) {
+  const src = `/api/channels/${encodeURIComponent(msg.jid)}/messages/${msg.id}/media`
+  const size = msg.media_size > 0 ? `${(msg.media_size / 1024).toFixed(0)} KB` : null
+
+  if (msg.type === 'image' || msg.type === 'sticker') {
+    return (
+      <a href={src} target="_blank" rel="noreferrer" className="block">
+        <img
+          src={src}
+          alt={label}
+          loading="lazy"
+          className={msg.type === 'sticker'
+            ? 'w-32 h-32 object-contain my-1'
+            : 'rounded-lg max-w-[320px] max-h-[340px] object-cover my-1'}
+        />
+      </a>
+    )
+  }
+
+  if (msg.type === 'video') {
+    return <video src={src} controls preload="metadata" className="rounded-lg max-w-[320px] my-1" />
+  }
+
+  if (msg.type === 'audio' || msg.type === 'voice') {
+    return (
+      <div className="my-1 min-w-[240px]">
+        <audio src={src} controls preload="none" className="w-full h-9" />
+        <span className="text-[10px] text-neutral-500">
+          {msg.type === 'voice' ? 'Voice note' : 'Audio'}{size ? ` · ${size}` : ''}
+        </span>
+      </div>
+    )
+  }
+
+  return (
+    <a
+      href={src}
+      target="_blank"
+      rel="noreferrer"
+      className="flex items-center gap-2 py-1 text-xs text-neutral-400 hover:text-accent transition-colors"
+    >
+      <span>📄</span>
+      <span>{label}</span>
+      {size && <span className="text-neutral-600">{size}</span>}
+    </a>
+  )
+}
+
 function MessageBubble({ msg, prevMsg, isGroupChat }) {
   const isMe = msg.is_from_me
   const isMedia = msg.type !== 'text' && msg.type !== 'reaction' && msg.type !== 'unknown'
@@ -102,23 +150,11 @@ function MessageBubble({ msg, prevMsg, isGroupChat }) {
             ? 'bg-accent/20 text-neutral-100 rounded-br-sm'
             : 'bg-neutral-800 text-neutral-200 rounded-bl-sm'
           }`}>
-          {isMedia && !msg.body && (
-            <div className="flex items-center gap-2 py-1">
-              <span className="text-neutral-400">
-                {msg.type === 'image' ? '🖼' : msg.type === 'video' ? '🎬' : msg.type === 'audio' ? '🎵' : msg.type === 'doc' ? '📄' : '📎'}
-              </span>
-              <span className="text-neutral-400 text-xs">{mediaLabels[msg.type] || msg.type}</span>
-              {msg.media_size > 0 && <span className="text-neutral-600 text-xs">{(msg.media_size / 1024).toFixed(0)}KB</span>}
-              <a
-                href={`/api/channels/${encodeURIComponent(msg.jid)}/messages/${msg.id}/media`}
-                target="_blank"
-                rel="noreferrer"
-                className="text-accent text-xs hover:underline ml-1"
-              >
-                View
-              </a>
-            </div>
-          )}
+          {/* Media renders whenever the message has any, not only when it
+              lacks a caption — a captioned photo used to show its caption and
+              nothing else. Images, video and audio play in place; anything
+              else falls back to a labelled link. */}
+          {isMedia && <MediaBlock msg={msg} label={mediaLabels[msg.type] || msg.type} />}
           {msg.body && <p className="whitespace-pre-wrap break-words">{msg.body}</p>}
           <span className={`text-[10px] float-right ml-3 mt-1 ${isMe ? 'text-accent/40' : 'text-neutral-600'}`}>
             {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}

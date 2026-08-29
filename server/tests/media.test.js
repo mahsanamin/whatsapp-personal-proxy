@@ -78,3 +78,21 @@ test('one module decides who may message whom', () => {
     )
   }
 })
+
+test('the console renders media even when it has a caption', () => {
+  const src = read('../../ui/src/pages/Workspace.jsx')
+  assert.ok(
+    !src.includes('isMedia && !msg.body'),
+    'gating media on the absence of a caption hides every captioned photo, ' +
+    'showing only its caption text',
+  )
+  assert.ok(src.includes('<MediaBlock'), 'the media renderer is gone')
+})
+
+test('images, video and audio play in the console rather than only linking', () => {
+  const src = read('../../ui/src/pages/Workspace.jsx')
+  const block = src.slice(src.indexOf('function MediaBlock'), src.indexOf('function MessageBubble'))
+  assert.ok(block.includes('<img'), 'photos no longer render inline')
+  assert.ok(block.includes('<video'), 'video no longer plays inline')
+  assert.ok(block.includes('<audio'), 'voice notes must be playable without downloading them')
+})
