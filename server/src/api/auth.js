@@ -1,5 +1,7 @@
 import crypto from 'node:crypto'
 import { config } from '../config.js'
+import { identifyCaller } from '../middleware/token.js'
+import { getSock } from '../wa/client.js'
 
 function constantTimeEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false
@@ -10,7 +12,11 @@ function constantTimeEqual(a, b) {
 }
 
 export default async function authRoutes(fastify) {
-  fastify.post('/auth/login', async (request, reply) => {
+  fastify.post('/auth/login', {
+    config: config.rateLimitLogin > 0
+      ? { rateLimit: { max: config.rateLimitLogin, timeWindow: '1 minute' } }
+      : {},
+  }, async (request, reply) => {
     const { username, password } = request.body || {}
 
     if (!username || !password) {
@@ -23,6 +29,38 @@ export default async function authRoutes(fastify) {
 
     request.session.authenticated = true
     return { ok: true }
+  })
+
+  // Connection test for the CLI: verifies the credential and reports what it
+  // can do, plus the live WhatsApp link state. `wpp connect` calls this before
+  // it will save a profile.
+  fastify.get('/auth/test', async (request, reply) => {
+    const caller = identifyCaller(request)
+    if (!caller) {
+      return reply.code(401).send({ error: 'Invalid or missing credential', code: 'UNAUTHORIZED' })
+    }
+
+    const sock = getSock()
+    return {
+      ok: true,
+      auth: {
+        type: caller.type,
+        name: caller.name,
+        scopes: caller.scopes,
+        last_used: caller.last_used ?? null,
+      },
+      wa: {
+        status: fastify.eventBus.waStatus || 'close',
+        user: sock?.user ? { id: sock.user.id, name: sock.user.name ?? null } : null,
+      },
+      server: {
+        public_url: config.publicUrl,
+        uptime: Math.floor(process.uptime()),
+      },
+      // Only revealed to a credential that could message them anyway; lets the
+      // CLI pick personal/send vs others/send in one round trip.
+      personal_numbers: caller.scopes.includes('personal:send') ? config.personalNumbers : undefined,
+    }
   })
 
   fastify.post('/auth/logout', async (request) => {

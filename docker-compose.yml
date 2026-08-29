@@ -2,8 +2,10 @@ services:
 
   server:
     build:
-      context: ./server
-      dockerfile: Dockerfile
+      # Repo root so the `wpp` CLI is bundled into the image and can be
+      # downloaded by other machines from /api/cli/wpp.
+      context: .
+      dockerfile: server/Dockerfile
     container_name: wpp-server
     restart: unless-stopped
     env_file: .env
@@ -17,8 +19,11 @@ services:
       - wa_session:/data/wa-session
       - db_data:/data/db
       - media_data:/data/media
-    ports:
-      - "127.0.0.1:3000:3000"
+    # Not published: nginx reaches the server over the compose network. Exposing
+    # it on the host would bypass the edge proxy and clash with anything else
+    # already on 3000.
+    expose:
+      - "3000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 30s
@@ -33,8 +38,8 @@ services:
     restart: unless-stopped
     depends_on:
       - server
-    ports:
-      - "127.0.0.1:5173:80"
+    expose:
+      - "5173"
 
   nginx:
     image: nginx:alpine

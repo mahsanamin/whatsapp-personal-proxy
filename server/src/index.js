@@ -20,6 +20,8 @@ import channelRoutes from './api/channels.js'
 import messageRoutes from './api/messages.js'
 import tabRoutes from './api/tabs.js'
 import whitelistRoutes from './api/whitelist.js'
+import cliRoutes from './api/cli.js'
+import eventRoutes from './api/events.js'
 import wsRoutes from './ws/index.js'
 
 const fastify = Fastify({
@@ -55,15 +57,12 @@ await fastify.register(session, {
 
 await fastify.register(websocket)
 
-if (config.rateLimitLogin > 0) {
-  await fastify.register(rateLimit, {
-    max: config.rateLimitLogin,
-    timeWindow: '1 minute',
-    keyGenerator: (request) => request.ip,
-    // Only apply global rate limit to login
-    allowList: (request) => !request.url.startsWith('/auth/login'),
-  })
-}
+// Registered non-globally: routes opt in via `config.rateLimit`, so the login
+// and send limits can differ and either can be switched off with a 0.
+await fastify.register(rateLimit, {
+  global: false,
+  keyGenerator: (request) => request.ip,
+})
 
 // Health check
 fastify.get('/health', async () => ({
@@ -82,6 +81,8 @@ await fastify.register(channelRoutes)
 await fastify.register(messageRoutes)
 await fastify.register(tabRoutes)
 await fastify.register(whitelistRoutes)
+await fastify.register(cliRoutes)
+await fastify.register(eventRoutes)
 await fastify.register(wsRoutes)
 
 // Force resolve unnamed contacts using Baileys

@@ -1,3 +1,4 @@
+import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { requireScope } from '../middleware/token.js'
 import { ensureConnected } from '../wa/client.js'
@@ -5,6 +6,9 @@ import { ensureConnected } from '../wa/client.js'
 export default async function othersRoutes(fastify) {
   fastify.post('/others/send', {
     preHandler: requireScope('others:send'),
+    config: config.rateLimitSend > 0
+      ? { rateLimit: { max: config.rateLimitSend, timeWindow: '1 minute' } }
+      : {},
   }, async (request, reply) => {
     const { to, message } = request.body || {}
 

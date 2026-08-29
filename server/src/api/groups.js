@@ -1,9 +1,13 @@
+import { config } from '../config.js'
 import { requireScope } from '../middleware/token.js'
 import { ensureConnected } from '../wa/client.js'
 
 export default async function groupsRoutes(fastify) {
   fastify.post('/groups/send', {
     preHandler: requireScope('groups:send'),
+    config: config.rateLimitSend > 0
+      ? { rateLimit: { max: config.rateLimitSend, timeWindow: '1 minute' } }
+      : {},
   }, async (request, reply) => {
     const { jid, message } = request.body || {}
 

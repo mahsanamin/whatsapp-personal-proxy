@@ -1,25 +1,55 @@
 import { db } from '../db/index.js'
 import { requireScope } from '../middleware/token.js'
 import { downloadMediaOnDemand } from '../wa/media.js'
+import { expandJids } from '../db/lidmap.js'
+import { toJid, channelType } from '../util/jid.js'
+
+// Attach reactions to their target message and drop the standalone
+// reaction rows, which are noise in a transcript.
+function withReactions(messages) {
+  const msgIds = messages.filter(m => m.type !== 'reaction').map(m => m.id)
+  const reactions = msgIds.length > 0
+    ? db.prepare(
+        `SELECT body, quoted_id, from_jid FROM messages WHERE type = 'reaction' AND quoted_id IN (${msgIds.map(() => '?').join(',')})`,
+      ).all(...msgIds)
+    : []
+
+  const reactionMap = {}
+  for (const r of reactions) {
+    if (!reactionMap[r.quoted_id]) reactionMap[r.quoted_id] = []
+    reactionMap[r.quoted_id].push({ emoji: r.body, from: r.from_jid })
+  }
+
+  return messages
+    .filter(m => m.type !== 'reaction')
+    .map(m => ({ ...m, reactions: reactionMap[m.id] || [] }))
+}
+
+const MESSAGE_COLUMNS =
+  'id, jid, from_jid, body, type, timestamp, is_from_me, media_mime, media_size, media_saved, quoted_id'
 
 export default async function messageRoutes(fastify) {
   fastify.get('/channels/:jid/messages', {
     preHandler: requireScope('channels:read'),
   }, async (request) => {
-    const { jid } = request.params
-    const { limit = 50, before, type } = request.query
+    const requested = toJid(request.params.jid) || request.params.jid
+    const { limit = 50, before, after, type } = request.query
 
-    let sql = 'SELECT id, jid, from_jid, body, type, timestamp, is_from_me, media_mime, media_size, media_saved, quoted_id FROM messages WHERE jid = ?'
-    const params = [jid]
+    // A DM can be filed under the phone-number JID, the @lid one, or both.
+    // Read across every JID that maps to the same conversation.
+    const jids = expandJids(requested)
+
+    let sql = `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE jid IN (${jids.map(() => '?').join(',')})`
+    const params = [...jids]
 
     if (before) {
       sql += ' AND timestamp < ?'
       params.push(before)
     }
 
-    if (request.query.after) {
+    if (after) {
       sql += ' AND timestamp > ?'
-      params.push(request.query.after)
+      params.push(after)
     }
 
     if (type) {
@@ -28,29 +58,49 @@ export default async function messageRoutes(fastify) {
     }
 
     sql += ' ORDER BY timestamp DESC LIMIT ?'
-    params.push(Math.min(parseInt(limit, 10), 200))
+    params.push(Math.min(parseInt(limit, 10) || 50, 200))
 
-    const messages = db.prepare(sql).all(...params)
+    return withReactions(db.prepare(sql).all(...params))
+  })
 
-    // Fetch reactions for these messages
-    const msgIds = messages.filter(m => m.type !== 'reaction').map(m => m.id)
-    const reactions = msgIds.length > 0
-      ? db.prepare(
-          `SELECT body, quoted_id, from_jid FROM messages WHERE type = 'reaction' AND quoted_id IN (${msgIds.map(() => '?').join(',')})`,
-        ).all(...msgIds)
-      : []
+  // Full-text-ish search over stored message bodies. Scoped to one chat with
+  // ?jid=, otherwise across everything the mirror has seen.
+  fastify.get('/messages/search', {
+    preHandler: requireScope('channels:read'),
+  }, async (request, reply) => {
+    const { q, jid, limit = 50, type } = request.query
 
-    // Group reactions by target message
-    const reactionMap = {}
-    for (const r of reactions) {
-      if (!reactionMap[r.quoted_id]) reactionMap[r.quoted_id] = []
-      reactionMap[r.quoted_id].push({ emoji: r.body, from: r.from_jid })
+    if (!q || !q.trim()) {
+      return reply.code(400).send({ error: 'Query parameter "q" required', code: 'BAD_INPUT' })
     }
 
-    // Attach reactions and filter out standalone reaction messages
-    return messages
-      .filter(m => m.type !== 'reaction')
-      .map(m => ({ ...m, reactions: reactionMap[m.id] || [] }))
+    let sql = `
+      SELECT m.${MESSAGE_COLUMNS.split(', ').join(', m.')},
+             cm.display_name AS channel_name
+      FROM messages m
+      LEFT JOIN channel_meta cm ON cm.jid = m.jid
+      WHERE m.body LIKE ? AND m.type != 'reaction'
+    `
+    const params = [`%${q}%`]
+
+    if (jid) {
+      const jids = expandJids(toJid(jid) || jid)
+      sql += ` AND m.jid IN (${jids.map(() => '?').join(',')})`
+      params.push(...jids)
+    }
+
+    if (type) {
+      sql += ' AND m.type = ?'
+      params.push(type)
+    }
+
+    sql += ' ORDER BY m.timestamp DESC LIMIT ?'
+    params.push(Math.min(parseInt(limit, 10) || 50, 200))
+
+    return db.prepare(sql).all(...params).map(row => ({
+      ...row,
+      channel_type: channelType(row.jid),
+    }))
   })
 
   // Stream media on demand — does NOT write to disk

@@ -18,9 +18,18 @@ export default function Tokens() {
   const [scopes, setScopes] = useState([])
   const [newToken, setNewToken] = useState(null)
   const [copied, setCopied] = useState(false)
+  const [install, setInstall] = useState(null)
+  const [copiedInstall, setCopiedInstall] = useState(false)
 
   const load = () => api('/tokens').then(setTokens).catch(() => {})
   useEffect(() => { load() }, [])
+  useEffect(() => { api('/cli/install-command').then(setInstall).catch(() => {}) }, [])
+
+  const copyInstall = () => {
+    navigator.clipboard.writeText(`${install.install}\n${install.connect}`)
+    setCopiedInstall(true)
+    setTimeout(() => setCopiedInstall(false), 2000)
+  }
 
   const toggleScope = (scope) => {
     setScopes(prev => prev.includes(scope) ? prev.filter(s => s !== scope) : [...prev, scope])
@@ -94,6 +103,36 @@ export default function Tokens() {
                 {copied ? 'Copied!' : 'Copy'}
               </button>
             </div>
+            {install && (
+              <p className="text-[11px] text-neutral-500 mt-3">
+                On the other machine: <code className="text-neutral-400">{install.connect}</code> and paste this key when prompted.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* CLI bootstrap — everything a new machine needs */}
+        {install && (
+          <div className="mb-6 bg-neutral-900/50 border border-neutral-800 rounded-xl p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h2 className="text-sm font-medium text-neutral-200">Use WPP from another machine</h2>
+                <p className="text-[11px] text-neutral-500 mt-0.5">
+                  Install the <code className="text-neutral-400">wpp</code> CLI, then connect it with a key from this page. Python 3.9+, no other dependencies.
+                </p>
+              </div>
+              <button
+                onClick={copyInstall}
+                className="text-xs bg-neutral-800 hover:bg-neutral-700 text-neutral-300 rounded-lg px-3 py-1.5 transition-all flex-shrink-0"
+              >
+                {copiedInstall ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
+            <pre className="bg-bg border border-neutral-800 rounded-lg px-4 py-3 text-[11px] font-mono text-neutral-300 overflow-x-auto">
+{install.install}
+{'\n'}
+{install.connect}
+            </pre>
           </div>
         )}
 

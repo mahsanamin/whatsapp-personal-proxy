@@ -5,6 +5,9 @@ import { getSock, ensureConnected } from '../wa/client.js'
 export default async function personalRoutes(fastify) {
   fastify.post('/personal/send', {
     preHandler: requireScope('personal:send'),
+    config: config.rateLimitSend > 0
+      ? { rateLimit: { max: config.rateLimitSend, timeWindow: '1 minute' } }
+      : {},
   }, async (request, reply) => {
     const { to, message } = request.body || {}
 

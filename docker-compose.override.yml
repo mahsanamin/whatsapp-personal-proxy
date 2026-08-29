@@ -4,6 +4,7 @@ services:
       target: dev
     volumes:
       - ./server/src:/app/src
+      - ./wpp:/app/wpp:ro
     environment:
       NODE_ENV: development
 
@@ -13,4 +14,4 @@ services:
     volumes:
       - ./ui/src:/app/src
     environment:
-      VITE_API_URL: http://localhost:3000
+      VITE_API_URL: http://server:3000

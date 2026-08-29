@@ -38,18 +38,25 @@ jobs:
       - run: cd ui && npm audit --audit-level=high
       - run: cd ui && npm run build
 
-  cli:
-    name: CLI (npm audit)
+  tests:
+    name: Tests (server + CLI)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: cli/package-lock.json
-      - run: cd cli && npm ci
-      - run: cd cli && npm audit --audit-level=high
+      - name: Server unit tests
+        run: cd server && npm test
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      # 3.9 is the floor the CLI promises; run the suite on it so a newer
+      # syntax slip cannot ship to a machine with an older Python.
+      - name: CLI compiles and passes its tests
+        run: |
+          python3 -m py_compile wpp
+          python3 -m unittest discover -s tests/cli -t .
 
   docker:
     name: Docker compose build

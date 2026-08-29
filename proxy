@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# WPP stack control. Mirrors ./proxy in slack-personal-proxy.
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+COMPOSE=(docker compose)
+if ! docker compose version >/dev/null 2>&1; then
+  if command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE=(docker-compose)
+  else
+    echo "docker compose is not available on this machine" >&2
+    exit 1
+  fi
+fi
+
+public_url() {
+  if [ -f .env ]; then
+    grep -E '^PUBLIC_URL=' .env | tail -1 | cut -d= -f2- | tr -d '"'"'"
+  fi
+}
+
+require_env() {
+  if [ ! -f .env ]; then
+    echo "No .env found. Run: ./proxy init" >&2
+    exit 1
+  fi
+}
+
+cmd_init() {
+  mkdir -p data/db data/wa-session data/media
+  if [ -f .env ]; then
+    echo ".env already exists, leaving it alone"
+  else
+    cp .env.example .env
+    echo "Created .env from .env.example"
+  fi
+  cat <<'MSG'
+
+Next:
+  1. Edit .env — set ADMIN_PASS, JWT_SECRET (openssl rand -hex 32),
+     PERSONAL_NUMBERS, and PUBLIC_URL.
+  2. ./proxy start
+  3. Open PUBLIC_URL, sign in, and scan the QR code.
+MSG
+}
+
+cmd_start() {
+  require_env
+  mkdir -p data/db data/wa-session data/media
+  "${COMPOSE[@]}" up -d --build
+  echo
+  cmd_status
+}
+
+cmd_dev() {
+  require_env
+  mkdir -p data/db data/wa-session data/media
+  "${COMPOSE[@]}" up --build
+}
+
+cmd_stop() {
+  "${COMPOSE[@]}" down
+}
+
+cmd_restart() {
+  cmd_stop
+  cmd_start
+}
+
+cmd_build() {
+  "${COMPOSE[@]}" build "$@"
+}
+
+cmd_logs() {
+  "${COMPOSE[@]}" logs -f "$@"
+}
+
+cmd_shell() {
+  "${COMPOSE[@]}" exec "${1:-server}" sh
+}
+
+cmd_status() {
+  "${COMPOSE[@]}" ps
+  local url
+  url="$(public_url)"
+  if [ -n "$url" ]; then
+    echo
+    echo "Console:  $url"
+    echo "Health:   $(curl -fsS --max-time 3 "$url/api/health" 2>/dev/null || echo 'unreachable')"
+    echo "CLI:      curl -fsSL $url/api/cli/wpp -o ~/.local/bin/wpp && chmod 755 ~/.local/bin/wpp"
+  fi
+}
+
+cmd_cli() {
+  local url
+  url="$(public_url)"
+  [ -n "$url" ] || { echo "PUBLIC_URL is not set in .env" >&2; exit 1; }
+  curl -fsS "$url/api/cli/install-command"
+  echo
+}
+
+cmd_test() {
+  ( cd server && npm test )
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -m unittest discover -s tests/cli -t . -v
+  fi
+}
+
+usage() {
+  cat <<'MSG'
+Usage: ./proxy <command>
+
+  init      Create data dirs and .env from the template
+  start     Build and start the stack in the background
+  dev       Start in the foreground with hot reload
+  stop      Stop the stack (data under ./data survives)
+  restart   stop, then start
+  build     Rebuild images
+  status    Show containers, health, and the CLI install command
+  logs      Tail logs (optionally for one service)
+  shell     Open a shell in a service (default: server)
+  cli       Print the CLI install/connect commands for this server
+  test      Run the server and CLI test suites
+MSG
+}
+
+case "${1:-}" in
+  init)    shift; cmd_init "$@" ;;
+  start|up) shift; cmd_start "$@" ;;
+  dev)     shift; cmd_dev "$@" ;;
+  stop|down) shift; cmd_stop "$@" ;;
+  restart) shift; cmd_restart "$@" ;;
+  build)   shift; cmd_build "$@" ;;
+  status|ps) shift; cmd_status "$@" ;;
+  logs)    shift; cmd_logs "$@" ;;
+  shell)   shift; cmd_shell "$@" ;;
+  cli)     shift; cmd_cli "$@" ;;
+  test)    shift; cmd_test "$@" ;;
+  ""|-h|--help|help) usage ;;
+  *) echo "Unknown command: $1" >&2; echo; usage; exit 1 ;;
+esac

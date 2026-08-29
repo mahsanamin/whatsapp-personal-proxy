@@ -46,3 +46,38 @@ export function requireScope(scope) {
     request.token = { ...token, scopes }
   }
 }
+
+/**
+ * Identify the caller without enforcing a scope.
+ * Returns { type: 'session', scopes: VALID_SCOPES } for the web console,
+ * { type: 'token', id, name, scopes } for a Bearer token, or null.
+ */
+export function identifyCaller(request) {
+  if (request.session?.authenticated) {
+    return { type: 'session', name: 'web console', scopes: [...VALID_SCOPES] }
+  }
+
+  // Header only. A token in a query string leaks into nginx access logs, any
+  // fronting proxy's logs, browser history, and Referer headers.
+  const auth = request.headers.authorization
+  if (!auth?.startsWith('Bearer ')) return null
+  const raw = auth.slice(7)
+
+  const hash = crypto.createHash('sha256').update(raw).digest('hex')
+  const token = db.prepare(
+    'SELECT id, name, scopes, revoked, created_at, last_used FROM tokens WHERE token_hash = ?'
+  ).get(hash)
+
+  if (!token || token.revoked) return null
+
+  db.prepare('UPDATE tokens SET last_used = CURRENT_TIMESTAMP WHERE id = ?').run(token.id)
+
+  return {
+    type: 'token',
+    id: token.id,
+    name: token.name,
+    scopes: JSON.parse(token.scopes),
+    created_at: token.created_at,
+    last_used: token.last_used,
+  }
+}

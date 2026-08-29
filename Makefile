@@ -1,18 +1,12 @@
-.PHONY: init up down logs dev
+# Thin wrapper over ./proxy, which is the canonical entry point.
+.PHONY: init up down dev logs status build test cli
 
-init:
-	mkdir -p data/db data/wa-session data/media
-	cp -n .env.example .env || true
-	@echo "Edit .env then run: make up"
-
-up:
-	docker compose up -d --build
-
-dev:
-	docker compose up --build
-
-down:
-	docker compose down
-
-logs:
-	docker compose logs -f
+init:   ; @./proxy init
+up:     ; @./proxy start
+dev:    ; @./proxy dev
+down:   ; @./proxy stop
+logs:   ; @./proxy logs
+status: ; @./proxy status
+build:  ; @./proxy build
+test:   ; @./proxy test
+cli:    ; @./proxy cli

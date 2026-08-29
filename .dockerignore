@@ -1,0 +1,11 @@
+.git
+.github
+.githooks
+data
+docs
+node_modules
+**/node_modules
+**/.env
+.env
+*.md
+tests
