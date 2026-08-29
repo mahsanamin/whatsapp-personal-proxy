@@ -63,3 +63,45 @@ test('signal keys are cached', () => {
     'uncached signal keys cause decrypt failures and "Device out of sync" on the phone',
   )
 })
+
+test('numeric values are not leaked into JSX as bare truthiness', () => {
+  const src = readFileSync(new URL('../../ui/src/pages/Workspace.jsx', import.meta.url), 'utf8')
+  // `a && b && 0` evaluates to 0, and React renders that as a visible "0".
+  // Every guard on a SQLite integer must be coerced or compared.
+  assert.ok(
+    src.includes('const showSender = Boolean('),
+    'showSender is truthiness-chained onto is_from_me (0/1) again; it renders a stray 0',
+  )
+  assert.ok(
+    !/\{msg\.media_size &&/.test(src),
+    'media_size guarded by bare truthiness renders a stray 0 when the size is 0',
+  )
+})
+
+test('an outgoing message reconciles with its WebSocket echo', () => {
+  const src = readFileSync(new URL('../../ui/src/pages/Workspace.jsx', import.meta.url), 'utf8')
+  assert.ok(
+    src.includes('res.messageId'),
+    'handleSend no longer adopts the real message id, so the echo draws a second bubble',
+  )
+})
+
+test('the WebSocket hook calls the current handlers, not the ones from first render', () => {
+  const src = readFileSync(new URL('../../ui/src/ws/useWebSocket.js', import.meta.url), 'utf8')
+  assert.ok(
+    src.includes('handlers.current'),
+    'handlers captured in the mount effect see activeJid as null forever',
+  )
+  assert.ok(
+    src.includes('setTimeout(connect'),
+    'a dropped socket must reconnect, not just clear its ref',
+  )
+})
+
+test('console sessions are persisted, not held in memory', () => {
+  const src = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8')
+  assert.ok(
+    src.includes('SqliteSessionStore'),
+    'the default in-memory store signs the owner out on every restart',
+  )
+})

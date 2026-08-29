@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { useWebSocket } from '../ws/useWebSocket'
@@ -80,7 +80,11 @@ function MessageBubble({ msg, prevMsg }) {
   const isMe = msg.is_from_me
   const isMedia = msg.type !== 'text' && msg.type !== 'reaction' && msg.type !== 'unknown'
   const mediaLabels = { image: 'Photo', video: 'Video', doc: 'Document', audio: 'Audio', sticker: 'Sticker' }
-  const showSender = !isMe && msg.from_jid && (!prevMsg || prevMsg.from_jid !== msg.from_jid || prevMsg.is_from_me)
+  // Coerced: is_from_me is SQLite's 0/1, and `a && b && 0` evaluates to 0,
+  // which React happily renders as a literal "0" above the bubble.
+  const showSender = Boolean(
+    !isMe && msg.from_jid && (!prevMsg || prevMsg.from_jid !== msg.from_jid || prevMsg.is_from_me)
+  )
 
   return (
     <div className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-1 group`}>
@@ -99,7 +103,7 @@ function MessageBubble({ msg, prevMsg }) {
                 {msg.type === 'image' ? '🖼' : msg.type === 'video' ? '🎬' : msg.type === 'audio' ? '🎵' : msg.type === 'doc' ? '📄' : '📎'}
               </span>
               <span className="text-neutral-400 text-xs">{mediaLabels[msg.type] || msg.type}</span>
-              {msg.media_size && <span className="text-neutral-600 text-xs">{(msg.media_size / 1024).toFixed(0)}KB</span>}
+              {msg.media_size > 0 && <span className="text-neutral-600 text-xs">{(msg.media_size / 1024).toFixed(0)}KB</span>}
               <a
                 href={`/api/channels/${encodeURIComponent(msg.jid)}/messages/${msg.id}/media`}
                 target="_blank"
@@ -335,6 +339,8 @@ export default function Workspace({ onLogout }) {
   const [msgInput, setMsgInput] = useState('')
   const [waStatus, setWaStatus] = useState('close')
   const [waLinked, setWaLinked] = useState(true)
+  const [syncingContacts, setSyncingContacts] = useState(false)
+  const [syncNote, setSyncNote] = useState(null)
   const [search, setSearch] = useState('')
   const [sendError, setSendError] = useState(null)
   const [syncStats, setSyncStats] = useState({ channels: 0, messages: 0 })
@@ -342,10 +348,19 @@ export default function Workspace({ onLogout }) {
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
 
+  // One conversation can be addressed two ways, so an arriving message may
+  // carry the @lid address while the open chat is keyed by its phone number.
+  const openChannel = channels.find(c => c.jid === activeJid)
+  const activeJids = useMemo(
+    () => new Set([activeJid, ...(openChannel?.alt_jids || [])].filter(Boolean)),
+    [activeJid, openChannel],
+  )
+
   const { connected } = useWebSocket({
     onMessage: (data) => {
-      if (data.jid === activeJid) {
-        setMessages(prev => [...prev, data])
+      if (activeJids.has(data.jid) || (data.canonical_jid && data.canonical_jid === activeJid)) {
+        // The chat is also refetched on open, so guard against a double insert.
+        setMessages(prev => prev.some(m => m.id === data.id) ? prev : [...prev, data])
       }
       loadChannels()
     },
@@ -412,8 +427,14 @@ export default function Workspace({ onLogout }) {
     setSendError(null)
     const text = msgInput
     setMsgInput('')
+
+    // Show it straight away under a placeholder id. WhatsApp echoes the message
+    // back over the WebSocket carrying its real id, so adopt that id as soon as
+    // the send returns — otherwise the echo reads as a different message and
+    // the same bubble is drawn twice.
+    const tempId = `pending-${Date.now()}`
     setMessages(prev => [...prev, {
-      id: Date.now().toString(),
+      id: tempId,
       jid: activeJid,
       from_jid: 'me',
       body: text,
@@ -421,12 +442,26 @@ export default function Workspace({ onLogout }) {
       timestamp: new Date().toISOString(),
       is_from_me: 1,
       reactions: [],
+      pending: true,
     }])
+
     try {
-      await api('/send', { method: 'POST', body: { jid: activeJid, message: text } })
+      const res = await api('/send', { method: 'POST', body: { jid: activeJid, message: text } })
+      setMessages(prev => {
+        // The echo can beat the HTTP response; if it already arrived, the
+        // placeholder is simply redundant.
+        if (res.messageId && prev.some(m => m.id === res.messageId)) {
+          return prev.filter(m => m.id !== tempId)
+        }
+        return prev.map(m => (
+          m.id === tempId ? { ...m, id: res.messageId || m.id, pending: false } : m
+        ))
+      })
     } catch (err) {
+      // Nothing was sent, so stop showing it as though it had been.
+      setMessages(prev => prev.filter(m => m.id !== tempId))
       setSendError(err.message)
-      setTimeout(() => setSendError(null), 3000)
+      setTimeout(() => setSendError(null), 5000)
     }
   }
 
@@ -490,6 +525,25 @@ export default function Workspace({ onLogout }) {
           )}
         </div>
         <div className="flex items-center gap-1">
+          <button
+            onClick={async () => {
+              setSyncingContacts(true)
+              try {
+                const r = await api('/admin/resolve-contacts', { method: 'POST' })
+                setSyncNote(r.gained > 0 ? `+${r.gained} names` : 'no new names')
+              } catch (err) {
+                setSyncNote(err.message)
+              }
+              setSyncingContacts(false)
+              loadChannels()
+              setTimeout(() => setSyncNote(null), 6000)
+            }}
+            disabled={syncingContacts || waStatus !== 'open'}
+            title="Ask WhatsApp to resend your contact names"
+            className="text-xs text-neutral-500 hover:text-accent disabled:opacity-40 transition-colors px-2 py-1 rounded hover:bg-neutral-800"
+          >
+            {syncingContacts ? 'Syncing contacts…' : syncNote || 'Sync contacts'}
+          </button>
           {waStatus !== 'open' && (
             <Link to="/connect" className="text-xs text-yellow-400 hover:text-yellow-300 transition-colors px-2 py-1 rounded hover:bg-neutral-800">
               Link Device

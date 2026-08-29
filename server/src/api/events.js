@@ -35,7 +35,7 @@ export default async function eventRoutes(fastify) {
     write('ready', { wa: eventBus.waStatus || 'close' })
 
     const onMessage = (msg) => {
-      if (only && !only.has(msg.jid)) return
+      if (only && !only.has(msg.jid) && !only.has(msg.canonical_jid)) return
       if (type && msg.type !== type) return
       write('message.new', msg)
     }

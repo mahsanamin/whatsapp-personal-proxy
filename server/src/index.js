@@ -7,6 +7,7 @@ import rateLimit from '@fastify/rate-limit'
 import { EventEmitter } from 'node:events'
 import { config } from './config.js'
 import { db } from './db/index.js'
+import { SqliteSessionStore } from './db/sessionStore.js'
 import { requireSession } from './middleware/session.js'
 import { createWAClient } from './wa/client.js'
 
@@ -45,13 +46,18 @@ await fastify.register(cors, {
 
 await fastify.register(cookie)
 
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
+
 await fastify.register(session, {
   secret: config.jwtSecret,
+  // Persisted in SQLite; the default in-memory store signed the owner out of
+  // the console on every restart.
+  store: new SqliteSessionStore({ ttlMs: SESSION_TTL_MS }),
   cookie: {
     secure: config.cookieSecure,
     httpOnly: true,
     sameSite: 'lax',
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    maxAge: SESSION_TTL_MS,
   },
 })
 
@@ -85,32 +91,76 @@ await fastify.register(cliRoutes)
 await fastify.register(eventRoutes)
 await fastify.register(wsRoutes)
 
-// Force resolve unnamed contacts using Baileys
+// Force resolve unnamed contacts and groups.
+//
+// Address-book names are not something this server can look up on demand:
+// WhatsApp pushes them to a linked device through app-state sync, the same
+// mechanism WhatsApp Web relies on. So ask for that sync again, then fill in
+// group subjects (which *can* be fetched directly) and re-propagate names
+// across each contact's two JIDs.
 fastify.post('/admin/resolve-contacts', {
   preHandler: requireSession,
 }, async (request, reply) => {
   const { ensureConnected } = await import('./wa/client.js')
+  const { backfillLidMap } = await import('./db/lidmap.js')
   const sock = ensureConnected()
   if (!sock) return reply.code(503).send({ error: 'WhatsApp not connected', code: 'WA_DISCONNECTED' })
 
-  const unnamed = db.prepare(
-    "SELECT jid FROM channel_meta WHERE display_name IS NULL AND EXISTS (SELECT 1 FROM messages m WHERE m.jid = channel_meta.jid AND m.type != 'unknown')"
+  const before = db.prepare('SELECT COUNT(*) AS c FROM channel_meta WHERE display_name IS NOT NULL').get().c
+
+  // Contact names live in these app-state collections. Re-requesting them is
+  // the only way to pull address-book names down to a companion device.
+  let appStateError = null
+  try {
+    await sock.resyncAppState(['critical_unblock_low', 'regular_high', 'regular_low', 'regular'], true)
+  } catch (err) {
+    appStateError = err?.message || String(err)
+  }
+
+  // Group subjects can be fetched directly.
+  const unnamedGroups = db.prepare(
+    "SELECT jid FROM channel_meta WHERE display_name IS NULL AND jid LIKE '%@g.us'"
   ).all()
 
-  let resolved = 0
-  for (const { jid } of unnamed) {
+  let groupsResolved = 0
+  for (const { jid } of unnamedGroups) {
     try {
-      if (jid.endsWith('@g.us')) {
-        const meta = await sock.groupMetadata(jid)
-        if (meta?.subject) {
-          db.prepare('UPDATE channel_meta SET display_name = ? WHERE jid = ?').run(meta.subject, jid)
-          resolved++
-        }
+      const meta = await sock.groupMetadata(jid)
+      if (meta?.subject) {
+        db.prepare('UPDATE channel_meta SET display_name = ? WHERE jid = ?').run(meta.subject, jid)
+        groupsResolved++
       }
     } catch (_) {}
   }
 
-  return { ok: true, checked: unnamed.length, resolved }
+  // resyncAppState resolves as soon as the request is acknowledged; the
+  // contact records arrive afterwards as events. Measuring straight away
+  // reported "gained: 0" while hundreds of names were still landing, so wait
+  // for the count to stop moving before answering.
+  const countNamed = () =>
+    db.prepare('SELECT COUNT(*) AS c FROM channel_meta WHERE display_name IS NOT NULL').get().c
+
+  let after = countNamed()
+  let settled = 0
+  for (let waited = 0; waited < 30_000 && settled < 3; waited += 1000) {
+    await new Promise(resolve => setTimeout(resolve, 1000))
+    const now = countNamed()
+    settled = now === after ? settled + 1 : 0
+    after = now
+  }
+
+  const backfilled = backfillLidMap()
+  after = countNamed()
+
+  return {
+    ok: true,
+    named_before: before,
+    named_after: after,
+    gained: after - before,
+    groups_resolved: groupsResolved,
+    lid_mappings: backfilled.mappings,
+    app_state_error: appStateError,
+  }
 })
 
 // General send — for web UI session (sends to any JID directly)

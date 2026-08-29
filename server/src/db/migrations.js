@@ -68,5 +68,15 @@ export function runMigrations(db) {
       updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_lid_map_pn ON lid_map(pn);
+
+    -- Web console sessions. Kept in SQLite rather than in memory so a server
+    -- restart (a redeploy, a crash, a config change) does not sign the owner
+    -- out of the console.
+    CREATE TABLE IF NOT EXISTS sessions (
+      sid         TEXT PRIMARY KEY,
+      data        TEXT NOT NULL,
+      expires_at  INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
   `)
 }

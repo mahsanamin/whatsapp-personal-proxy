@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { canonicalJid } from '../db/lidmap.js'
 
 const MAX_RETRIES = 10
 let retries = 0
@@ -354,7 +355,10 @@ export async function createWAClient(sessionPath, eventBus) {
         const normalized = normalizeMessage(msg)
         if (!normalized) continue
         saveMessage(normalized)
-        eventBus.emit('message.new', normalized)
+        // Broadcast the address the chat is filed under as well as the one the
+        // message arrived on, so a subscriber can tell they are the same
+        // conversation without repeating the lid_map lookup itself.
+        eventBus.emit('message.new', { ...normalized, canonical_jid: canonicalJid(normalized.jid) })
       } catch (err) {
         // Never crash on a bad message
       }
