@@ -243,10 +243,17 @@ export default async function channelRoutes(fastify) {
       return reply.code(503).send({ error: 'WhatsApp not connected', code: 'WA_DISCONNECTED' })
     }
 
+    // Two directions. "extend" reaches further back than anything held;
+    // "refill" re-requests from the newest message backwards, which is how a
+    // gap in the middle gets filled — media dropped by a past ingestion bug
+    // left no row behind, so there is nothing to reach back *from*.
+    const mode = request.body?.mode === 'refill' ? 'refill' : 'extend'
+    const anchorOrder = mode === 'refill' ? 'DESC' : 'ASC'
+
     const oldest = db.prepare(
       `SELECT id, jid, timestamp, raw_json FROM messages
        WHERE jid IN (${jids.map(() => '?').join(',')})
-       ORDER BY timestamp ASC LIMIT 1`
+       ORDER BY timestamp ${anchorOrder} LIMIT 1`
     ).get(...jids)
 
     if (!oldest) {
@@ -284,8 +291,9 @@ export default async function channelRoutes(fastify) {
     return {
       ok: true,
       requested: count,
+      mode,
       // The phone answers out of band; poll the message list to see the result.
-      oldest_known: oldest.timestamp,
+      anchored_at: oldest.timestamp,
       stored_before: before,
       note: 'History arrives asynchronously; re-read the chat in a few seconds.',
     }

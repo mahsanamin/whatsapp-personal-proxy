@@ -32,3 +32,61 @@ export function repairMessageTimestamps() {
     return { repaired: 0, error: err.message }
   }
 }
+
+/**
+ * Re-classify messages that ingestion could not read.
+ *
+ * Content nested inside an envelope — an album child, a disappearing message —
+ * used to fall through to type 'unknown' with no media details, so albums were
+ * invisible. The payload was stored regardless, so re-running the parser over
+ * those rows recovers them in place: no re-sync, and the media becomes
+ * downloadable because its key is finally extracted.
+ */
+export async function repairUnknownMessages() {
+  let repaired = 0
+  let stillUnknown = 0
+
+  let normalizeMessage
+  try {
+    ({ normalizeMessage } = await import('../wa/client.js'))
+  } catch (err) {
+    return { repaired: 0, error: err.message }
+  }
+
+  const rows = db.prepare(
+    "SELECT id, raw_json FROM messages WHERE type = 'unknown' AND raw_json IS NOT NULL"
+  ).all()
+  if (rows.length === 0) return { repaired: 0, stillUnknown: 0 }
+
+  const { BufferJSON } = await import('@whiskeysockets/baileys')
+  const update = db.prepare(`
+    UPDATE messages
+    SET type = ?, body = ?, media_mime = ?, media_size = ?, media_sha256 = ?,
+        media_key = ?, media_url = ?
+    WHERE id = ?
+  `)
+
+  const apply = db.transaction((items) => {
+    for (const { row, next } of items) {
+      update.run(
+        next.type, next.body, next.media_mime, next.media_size,
+        next.media_sha256, next.media_key, next.media_url, row.id,
+      )
+    }
+  })
+
+  const pending = []
+  for (const row of rows) {
+    try {
+      const next = normalizeMessage(JSON.parse(row.raw_json, BufferJSON.reviver))
+      if (!next || next.type === 'unknown') { stillUnknown++; continue }
+      pending.push({ row, next })
+      repaired++
+    } catch (_) {
+      stillUnknown++
+    }
+  }
+
+  if (pending.length > 0) apply(pending)
+  return { repaired, stillUnknown }
+}

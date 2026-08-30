@@ -8,7 +8,7 @@ import { EventEmitter } from 'node:events'
 import { config } from './config.js'
 import { db } from './db/index.js'
 import { SqliteSessionStore } from './db/sessionStore.js'
-import { repairMessageTimestamps } from './db/repair.js'
+import { repairMessageTimestamps, repairUnknownMessages } from './db/repair.js'
 import { requireSession } from './middleware/session.js'
 import { createWAClient } from './wa/client.js'
 
@@ -43,6 +43,16 @@ const fastify = Fastify({
   if (error) fastify.log.warn({ error }, 'timestamp repair failed')
   else if (repaired > 0) fastify.log.warn({ repaired }, 'restored real send times from stored payloads')
 }
+
+// Content nested inside an envelope (album children, disappearing messages)
+// was stored as 'unknown' with its media details discarded. The payload is
+// still there, so re-parsing recovers them.
+repairUnknownMessages()
+  .then(({ repaired, stillUnknown, error }) => {
+    if (error) fastify.log.warn({ error }, 'unknown-message repair failed')
+    else if (repaired > 0) fastify.log.warn({ repaired, stillUnknown }, 're-classified messages that could not be parsed before')
+  })
+  .catch(() => {})
 
 // Event bus for WA events → WS broadcast
 const eventBus = new EventEmitter()

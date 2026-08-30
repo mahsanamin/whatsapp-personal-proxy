@@ -231,6 +231,21 @@ def api_download(profile, path, out_path):
         raise WppError("Could not reach %s: %s" % (profile["url"], exc.reason), "CONNECTION_FAILED")
 
 
+_EXT_BY_TYPE = {
+    "image": ".jpg", "video": ".mp4", "audio": ".m4a",
+    "voice": ".ogg", "doc": "", "sticker": ".webp",
+}
+
+
+def _ext_for(message):
+    """Prefer the real mime type; fall back to something sane for the kind."""
+    mime = (message.get("media_mime") or "").split(";")[0].strip()
+    guessed = mimetypes.guess_extension(mime) if mime else None
+    if guessed in (".jpe", ".jpeg"):
+        guessed = ".jpg"
+    return guessed or _EXT_BY_TYPE.get(message.get("type"), ".bin")
+
+
 def bool_text(value):
     return "true" if value else "false"
 
@@ -639,7 +654,7 @@ def run_api_command(args, profile, pretty):
         result = api_call(
             profile, "POST",
             "/api/channels/%s/history" % parse.quote(resolved["jid"], safe=""),
-            body={"count": args.count},
+            body={"count": args.count, "mode": "refill" if args.refill else "extend"},
         )
         return ok({"chat": resolved, **result})
 
@@ -773,6 +788,64 @@ def run_api_command(args, profile, pretty):
                 out,
             )
             return ok({"chat": resolved, "message_id": args.message_id, **result})
+        if args.media_action == "export":
+            resolved = resolve_target(profile, args.target)
+            out_dir = Path(args.out or ("wpp-media-" + resolved["jid"].split("@")[0])).expanduser()
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            wanted = set((args.type or "image,video,audio,voice,doc,sticker").split(","))
+            saved, failed, skipped = [], [], 0
+            cursor = None
+
+            # Page the whole conversation; a chat can hold far more media than
+            # one request returns.
+            while True:
+                page = api_call(
+                    profile, "GET",
+                    "/api/channels/%s/messages" % parse.quote(resolved["jid"], safe=""),
+                    {"limit": 200, "before": cursor},
+                )
+                if not page:
+                    break
+                cursor = page[-1]["timestamp"]
+                for m in page:
+                    if m.get("type") not in wanted:
+                        continue
+                    stamp = (m.get("timestamp") or "")[:19].replace(":", "-")
+                    name = "%s_%s%s" % (stamp, m["id"][:12], _ext_for(m))
+                    target = out_dir / name
+                    if target.exists() and target.stat().st_size > 0:
+                        skipped += 1
+                        continue
+                    try:
+                        info = api_download(
+                            profile,
+                            "/api/channels/%s/messages/%s/media" % (
+                                parse.quote(m.get("jid") or resolved["jid"], safe=""),
+                                parse.quote(m["id"], safe=""),
+                            ),
+                            target,
+                        )
+                        saved.append({"file": info["saved"], "bytes": info["bytes"], "at": m.get("timestamp")})
+                    except WppError as exc:
+                        try:
+                            target.unlink()
+                        except OSError:
+                            pass
+                        failed.append({"id": m["id"], "at": m.get("timestamp"), "reason": str(exc)})
+                if args.limit and len(saved) >= args.limit:
+                    break
+
+            return ok({
+                "chat": resolved,
+                "directory": str(out_dir),
+                "saved": len(saved),
+                "skipped_existing": skipped,
+                "failed": failed[:20],
+                "failed_count": len(failed),
+                "files": saved[:50],
+            }, meta={"note": "Media WhatsApp can no longer supply is listed under failed."})
+
         if args.media_action == "save":
             resolved = resolve_target(profile, args.target)
             result = api_call(profile, "POST", "/api/channels/%s/messages/%s/media/save" % (
@@ -873,6 +946,8 @@ def build_parser():
     )
     p.add_argument("target", help="Number, JID, or chat name")
     p.add_argument("--count", type=bounded_int(1, 200), default=200)
+    p.add_argument("--refill", action="store_true",
+                   help="Re-request recent history to fill gaps, rather than reaching further back")
 
     p = sub.add_parser("read", help="Mark a chat read, so the next brief excludes it")
     p.add_argument("target", help="Number, JID, or chat name")
@@ -957,6 +1032,12 @@ def build_parser():
     g.add_argument("target", help="The chat the message is in")
     g.add_argument("message_id")
     g.add_argument("--out", help="Where to write it (default: wpp-media-<id>)")
+    ex = ma.add_parser("export", help="Download every piece of media in a conversation")
+    ex.add_argument("target", help="Number, JID, or chat name")
+    ex.add_argument("--out", help="Directory to write into (default: wpp-media-<number>)")
+    ex.add_argument("--type", help="Comma-separated kinds (default: all)")
+    ex.add_argument("--limit", type=int, default=0, help="Stop after N files (0 = no limit)")
+
     sv = ma.add_parser("save", help="Ask the server to keep a copy under MEDIA_PATH")
     sv.add_argument("target")
     sv.add_argument("message_id")

@@ -440,7 +440,36 @@ function toNumber(value) {
   return null
 }
 
-function normalizeMessage(raw) {
+/**
+ * WhatsApp nests real content inside envelopes: an album's photos arrive as
+ * associatedChildMessage, a disappearing message as ephemeralMessage, and so
+ * on. Reading only the top level classified all of them as 'unknown' and threw
+ * away their media keys, so albums — several photos or videos sent together —
+ * never appeared at all.
+ */
+const MESSAGE_ENVELOPES = [
+  'ephemeralMessage',
+  'viewOnceMessage',
+  'viewOnceMessageV2',
+  'viewOnceMessageV2Extension',
+  'documentWithCaptionMessage',
+  'associatedChildMessage',
+  'editedMessage',
+  'deviceSentMessage',
+]
+
+export function unwrapMessage(message) {
+  let current = message
+  // Envelopes nest: a disappearing album child is wrapped twice.
+  for (let depth = 0; current && depth < 5; depth++) {
+    const envelope = MESSAGE_ENVELOPES.find(name => current?.[name]?.message)
+    if (!envelope) break
+    current = current[envelope].message
+  }
+  return current
+}
+
+export function normalizeMessage(raw) {
   const key = raw.key
   if (!key?.id || !key?.remoteJid) return null
 
@@ -451,7 +480,7 @@ function normalizeMessage(raw) {
   if (jid === 'status@broadcast') return null
 
   // Determine type and extract text
-  const msg = raw.message
+  const msg = unwrapMessage(raw.message)
   if (!msg) return null
 
   // Skip protocol/system messages (security notifications, app state sync, etc.)
@@ -514,6 +543,15 @@ function normalizeMessage(raw) {
     mediaSha256 = msg.stickerMessage.fileSha256 ? Buffer.from(msg.stickerMessage.fileSha256).toString('hex') : null
     mediaKey = msg.stickerMessage.mediaKey ? Buffer.from(msg.stickerMessage.mediaKey).toString('base64') : null
     mediaUrl = msg.stickerMessage.url
+  } else if (msg.locationMessage || msg.liveLocationMessage) {
+    const loc = msg.locationMessage || msg.liveLocationMessage
+    type = 'location'
+    body = loc.name || loc.address ||
+      (loc.degreesLatitude != null ? `${loc.degreesLatitude}, ${loc.degreesLongitude}` : null)
+  } else if (msg.contactMessage || msg.contactsArrayMessage) {
+    type = 'contact'
+    body = msg.contactMessage?.displayName ||
+      (msg.contactsArrayMessage?.contacts || []).map(c => c.displayName).filter(Boolean).join(', ') || null
   } else if (msg.reactionMessage) {
     type = 'reaction'
     body = msg.reactionMessage.text

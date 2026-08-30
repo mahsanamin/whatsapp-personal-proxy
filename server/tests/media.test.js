@@ -182,3 +182,44 @@ test('older history can be requested from the phone', () => {
     'there must be a way to ask for history older than anything stored',
   )
 })
+
+test('content nested inside an envelope is unwrapped, not called unknown', () => {
+  const src = read('../src/wa/client.js')
+  assert.ok(src.includes('MESSAGE_ENVELOPES'), 'the envelope list is gone')
+  for (const envelope of ['associatedChildMessage', 'ephemeralMessage', 'viewOnceMessage']) {
+    assert.ok(
+      src.includes(envelope),
+      `${envelope} is no longer unwrapped; an album's photos and videos arrive ` +
+      'inside one, and ignoring it discards their media keys entirely',
+    )
+  }
+})
+
+test('downloads unwrap the same envelopes the parser does', () => {
+  const src = read('../src/wa/media.js')
+  assert.ok(
+    src.includes('unwrapMessage'),
+    'Baileys looks for media at the top level of .message and rejects an album ' +
+    'child as "not a media message" unless it is unwrapped first',
+  )
+})
+
+test('a phone that never answers cannot hold a request open', () => {
+  const src = read('../src/wa/media.js')
+  assert.ok(
+    src.includes('REUPLOAD_TIMEOUT_MS') && src.includes('withTimeout'),
+    'the socket runs with no default query timeout, so the re-upload wait must ' +
+    'be bounded here or the request hangs until the proxy gives up',
+  )
+  const nginx = readFileSync(new URL('../../nginx/nginx.conf', import.meta.url), 'utf8')
+  assert.ok(
+    /location \/api\/[\s\S]*?proxy_read_timeout/.test(nginx),
+    'nginx defaults to a 60s read timeout, which returned 504 while the phone was still re-uploading',
+  )
+})
+
+test('a whole conversation of media can be exported at once', () => {
+  const cli = read('../../wpp')
+  assert.ok(cli.includes('"export"'), 'the bulk media export is gone')
+  assert.ok(cli.includes('skipped_existing'), 'export must be resumable rather than refetching everything')
+})

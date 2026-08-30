@@ -2,8 +2,20 @@ import { downloadMediaMessage, BufferJSON } from '@whiskeysockets/baileys'
 import { writeFile, mkdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { config } from '../config.js'
-import { getSock } from './client.js'
+import { getSock, unwrapMessage } from './client.js'
 import { db } from '../db/index.js'
+
+// Long enough for a phone on a slow link, short enough that a bulk export does
+// not stall on one dead item.
+const REUPLOAD_TIMEOUT_MS = 45_000
+
+function withTimeout(promise, ms, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new MediaUnavailableError(message, { status: 504 })), ms).unref?.()),
+  ])
+}
 
 export class MediaUnavailableError extends Error {
   constructor(message, { status = null, cause = null } = {}) {
@@ -77,6 +89,14 @@ export async function downloadMediaOnDemand(msgRow, opts = {}) {
     throw new MediaUnavailableError('Stored message payload is unreadable', { status: 500, cause: err })
   }
 
+  // Baileys looks for the media at the top level of .message. An album child
+  // or a disappearing message keeps it one or more envelopes down, and is
+  // rejected as "not a media message" unless it is unwrapped first.
+  const unwrapped = unwrapMessage(raw.message)
+  if (unwrapped && unwrapped !== raw.message) {
+    raw = { ...raw, message: unwrapped }
+  }
+
   let buffer
   let firstError = null
 
@@ -105,8 +125,16 @@ export async function downloadMediaOnDemand(msgRow, opts = {}) {
     // Ask the phone to re-upload. Attempted on any failure: the status codes
     // that mean "gone" are not reported consistently, and a needless retry
     // costs one round trip while a missed one loses the media entirely.
+    //
+    // Bounded explicitly: the socket runs with no default query timeout (so a
+    // full history sync is not cut short), which would otherwise let a phone
+    // that never answers hold this request open indefinitely.
     try {
-      raw = await sock.updateMediaMessage(raw)
+      raw = await withTimeout(
+        sock.updateMediaMessage(raw),
+        REUPLOAD_TIMEOUT_MS,
+        'the phone did not answer the re-upload request in time',
+      )
       buffer = await downloadMediaMessage(raw, 'buffer', {})
       if (!buffer || buffer.length === 0) {
         throw new MediaUnavailableError('Re-upload produced an empty file', { status: 502 })
