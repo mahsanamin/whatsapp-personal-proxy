@@ -159,3 +159,26 @@ test('a media failure reports why', () => {
     'the route must distinguish "gone" from "broken" instead of returning a blanket 500',
   )
 })
+
+test('the console can page back through the whole stored history', () => {
+  const src = read('../../ui/src/pages/Workspace.jsx')
+  assert.ok(
+    src.includes('loadOlder'),
+    'without pagination the console shows only the newest 50 messages, so a chat ' +
+    'with years of history appears to begin a few weeks ago',
+  )
+  assert.ok(src.includes('before=') || src.includes('&before='), 'older pages are never requested')
+  assert.ok(
+    src.includes('pendingScrollRestore'),
+    'prepending older messages must not throw the reader to the bottom',
+  )
+})
+
+test('older history can be requested from the phone', () => {
+  const src = read('../src/api/channels.js')
+  assert.ok(src.includes('fetchMessageHistory'), 'the on-demand history request is gone')
+  assert.ok(
+    src.includes("'/channels/:jid/history'"),
+    'there must be a way to ask for history older than anything stored',
+  )
+})

@@ -3,6 +3,7 @@ import { requireScope } from '../middleware/token.js'
 import { ensureConnected } from '../wa/client.js'
 import { channelType, toJid } from '../util/jid.js'
 import { canonicalJidMap, expandJids } from '../db/lidmap.js'
+import { loadMessageKey } from '../util/messageRef.js'
 
 export default async function channelRoutes(fastify) {
   fastify.get('/channels', {
@@ -221,6 +222,73 @@ export default async function channelRoutes(fastify) {
     ).get(...jids, upTo).c
 
     return { ok: true, jid: requested, read_up_to: upTo, unread_count: remaining }
+  })
+
+  // Ask the phone for history older than anything we hold.
+  //
+  // WhatsApp only pushes a slice of history to a companion device when it is
+  // linked; the rest stays on the phone until asked for. This is the request
+  // WhatsApp Web makes when you scroll past the beginning of what it has.
+  // Messages arrive asynchronously through messaging-history.set, so this
+  // returns once the request is sent and the caller polls for the result.
+  fastify.post('/channels/:jid/history', {
+    preHandler: requireScope('channels:read'),
+  }, async (request, reply) => {
+    const requested = toJid(request.params.jid) || request.params.jid
+    const jids = expandJids(requested)
+    const count = Math.min(Math.max(parseInt(request.body?.count, 10) || 50, 1), 200)
+
+    const sock = ensureConnected()
+    if (!sock) {
+      return reply.code(503).send({ error: 'WhatsApp not connected', code: 'WA_DISCONNECTED' })
+    }
+
+    const oldest = db.prepare(
+      `SELECT id, jid, timestamp, raw_json FROM messages
+       WHERE jid IN (${jids.map(() => '?').join(',')})
+       ORDER BY timestamp ASC LIMIT 1`
+    ).get(...jids)
+
+    if (!oldest) {
+      return reply.code(404).send({
+        error: 'No stored message to search backwards from',
+        code: 'NOT_FOUND',
+      })
+    }
+
+    const key = loadMessageKey(oldest.id)
+    if (!key) {
+      return reply.code(409).send({
+        error: 'Oldest stored message has no usable key',
+        code: 'NO_MESSAGE_KEY',
+      })
+    }
+
+    const before = db.prepare(
+      `SELECT COUNT(*) AS c FROM messages WHERE jid IN (${jids.map(() => '?').join(',')})`
+    ).get(...jids).c
+
+    try {
+      await sock.fetchMessageHistory(
+        count,
+        { remoteJid: oldest.jid, fromMe: Boolean(key.fromMe), id: key.id },
+        new Date(oldest.timestamp).getTime(),
+      )
+    } catch (err) {
+      return reply.code(502).send({
+        error: `WhatsApp refused the history request: ${err.message}`,
+        code: 'HISTORY_FETCH_FAILED',
+      })
+    }
+
+    return {
+      ok: true,
+      requested: count,
+      // The phone answers out of band; poll the message list to see the result.
+      oldest_known: oldest.timestamp,
+      stored_before: before,
+      note: 'History arrives asynchronously; re-read the chat in a few seconds.',
+    }
   })
 
   fastify.patch('/channels/:jid', {

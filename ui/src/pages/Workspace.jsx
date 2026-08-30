@@ -446,6 +446,11 @@ export default function Workspace({ onLogout }) {
   const [syncStats, setSyncStats] = useState({ channels: 0, messages: 0 })
   const [initialLoad, setInitialLoad] = useState(true)
   const messagesEndRef = useRef(null)
+  const messagePaneRef = useRef(null)
+  const [olderState, setOlderState] = useState({ loading: false, exhausted: false })
+  // Prepending older messages must not yank the view to the bottom, and must
+  // keep the reader looking at the same message they were already reading.
+  const pendingScrollRestore = useRef(null)
   const inputRef = useRef(null)
 
   // One conversation can be addressed two ways, so an arriving message may
@@ -506,14 +511,86 @@ export default function Workspace({ onLogout }) {
     return () => clearInterval(interval)
   }, [loadChannels])
 
+  const PAGE_SIZE = 50
+
   useEffect(() => {
     if (!activeJid) return
-    api(`/channels/${encodeURIComponent(activeJid)}/messages?limit=50`)
-      .then(msgs => setMessages(msgs.reverse()))
+    setOlderState({ loading: false, exhausted: false })
+    pendingScrollRestore.current = null
+    api(`/channels/${encodeURIComponent(activeJid)}/messages?limit=${PAGE_SIZE}`)
+      .then(msgs => {
+        setMessages(msgs.reverse())
+        setOlderState({ loading: false, exhausted: msgs.length < PAGE_SIZE })
+      })
       .catch(() => setMessages([]))
   }, [activeJid])
 
+  // Without this the console only ever showed the newest 50 messages, so a
+  // chat with years of history looked like it began a few weeks ago.
+  const loadOlder = useCallback(async () => {
+    if (!activeJid || olderState.loading || olderState.exhausted) return
+    const oldest = messages[0]
+    if (!oldest) return
+
+    setOlderState(s => ({ ...s, loading: true }))
+    const pane = messagePaneRef.current
+    pendingScrollRestore.current = pane ? pane.scrollHeight - pane.scrollTop : null
+
+    try {
+      const older = await api(
+        `/channels/${encodeURIComponent(activeJid)}/messages` +
+        `?limit=${PAGE_SIZE}&before=${encodeURIComponent(oldest.timestamp)}`
+      )
+      setMessages(prev => {
+        const seen = new Set(prev.map(m => m.id))
+        return [...older.reverse().filter(m => !seen.has(m.id)), ...prev]
+      })
+      setOlderState({ loading: false, exhausted: older.length < PAGE_SIZE })
+    } catch (_) {
+      pendingScrollRestore.current = null
+      setOlderState(s => ({ ...s, loading: false }))
+    }
+  }, [activeJid, messages, olderState.loading, olderState.exhausted])
+
+  // Past the start of what we hold, ask the phone for more. WhatsApp keeps the
+  // rest of the history there and only sends it when asked, which is what
+  // WhatsApp Web does when you scroll beyond its own cache.
+  const fetchOlderFromWhatsApp = useCallback(async () => {
+    if (!activeJid || olderState.loading) return
+    setOlderState(s => ({ ...s, loading: true, fetching: true }))
+    try {
+      await api(`/channels/${encodeURIComponent(activeJid)}/history`, {
+        method: 'POST',
+        body: { count: 200 },
+      })
+      // The phone answers out of band; give it a moment, then look again.
+      await new Promise(r => setTimeout(r, 4000))
+      const older = await api(
+        `/channels/${encodeURIComponent(activeJid)}/messages` +
+        `?limit=${PAGE_SIZE}&before=${encodeURIComponent(messages[0]?.timestamp || new Date().toISOString())}`
+      )
+      if (older.length > 0) {
+        setMessages(prev => {
+          const seen = new Set(prev.map(m => m.id))
+          return [...older.reverse().filter(m => !seen.has(m.id)), ...prev]
+        })
+        setOlderState({ loading: false, exhausted: false, fetching: false })
+      } else {
+        setOlderState({ loading: false, exhausted: true, fetching: false, noneLeft: true })
+      }
+    } catch (err) {
+      setOlderState(s => ({ ...s, loading: false, fetching: false, error: err.message }))
+    }
+  }, [activeJid, messages, olderState.loading])
+
   useEffect(() => {
+    const pane = messagePaneRef.current
+    if (pendingScrollRestore.current !== null && pane) {
+      // Put the previously-read message back under the cursor.
+      pane.scrollTop = pane.scrollHeight - pendingScrollRestore.current
+      pendingScrollRestore.current = null
+      return
+    }
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
@@ -749,7 +826,47 @@ export default function Workspace({ onLogout }) {
               }} />
 
               {/* Messages */}
-              <div className="flex-1 overflow-y-auto px-5 py-3">
+              <div
+                ref={messagePaneRef}
+                onScroll={(e) => { if (e.currentTarget.scrollTop < 120) loadOlder() }}
+                className="flex-1 overflow-y-auto px-5 py-3"
+              >
+                {!olderState.exhausted && (
+                  <div className="text-center py-2">
+                    <button
+                      type="button"
+                      onClick={loadOlder}
+                      disabled={olderState.loading}
+                      className="text-[11px] text-neutral-500 hover:text-accent disabled:opacity-40 transition-colors"
+                    >
+                      {olderState.loading ? 'Loading older messages…' : 'Load older messages'}
+                    </button>
+                  </div>
+                )}
+                {olderState.exhausted && messages.length > 0 && (
+                  <div className="text-center py-2">
+                    {olderState.noneLeft ? (
+                      <p className="text-[11px] text-neutral-700">
+                        Start of this conversation — WhatsApp has nothing older
+                      </p>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={fetchOlderFromWhatsApp}
+                        disabled={olderState.loading}
+                        title="Request older messages from your phone"
+                        className="text-[11px] text-neutral-500 hover:text-accent disabled:opacity-40 transition-colors"
+                      >
+                        {olderState.fetching
+                          ? 'Asking your phone for older messages…'
+                          : 'Fetch older history from WhatsApp'}
+                      </button>
+                    )}
+                    {olderState.error && (
+                      <p className="text-[11px] text-red-400 mt-1">{olderState.error}</p>
+                    )}
+                  </div>
+                )}
                 {groupedMessages.map((group) => (
                   <div key={group.date}>
                     <DateSeparator date={group.date} />

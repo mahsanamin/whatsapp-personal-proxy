@@ -634,6 +634,15 @@ def run_api_command(args, profile, pretty):
         })
         return ok(data, meta={"source_calls": 1})
 
+    if command == "sync":
+        resolved = resolve_target(profile, args.target)
+        result = api_call(
+            profile, "POST",
+            "/api/channels/%s/history" % parse.quote(resolved["jid"], safe=""),
+            body={"count": args.count},
+        )
+        return ok({"chat": resolved, **result})
+
     if command == "read":
         resolved = resolve_target(profile, args.target)
         result = api_call(
@@ -857,6 +866,13 @@ def build_parser():
     p.add_argument("--since", help="ISO timestamp; only activity after it")
     p.add_argument("--dms-only", action="store_true", help="Skip group chats")
     p.add_argument("--include-muted", action="store_true")
+
+    p = sub.add_parser(
+        "sync",
+        help="Ask your phone for messages older than any this server holds",
+    )
+    p.add_argument("target", help="Number, JID, or chat name")
+    p.add_argument("--count", type=bounded_int(1, 200), default=200)
 
     p = sub.add_parser("read", help="Mark a chat read, so the next brief excludes it")
     p.add_argument("target", help="Number, JID, or chat name")
