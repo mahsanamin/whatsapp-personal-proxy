@@ -1,6 +1,6 @@
 import { db } from '../db/index.js'
 import { requireScope } from '../middleware/token.js'
-import { downloadMediaOnDemand } from '../wa/media.js'
+import { downloadMediaOnDemand, MediaUnavailableError } from '../wa/media.js'
 import { expandJids, resolveNames } from '../db/lidmap.js'
 import { toJid, channelType } from '../util/jid.js'
 
@@ -139,10 +139,18 @@ export default async function messageRoutes(fastify) {
 
       if (range) {
         const parts = range.replace(/bytes=/, '').split('-')
-        const start = parseInt(parts[0], 10) || 0
-        const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1
+        // "bytes=-500" asks for the LAST 500 bytes. Reading parts[0] as 0 and
+        // parts[1] as the end returns the wrong slice under a header that
+        // claims it is the right one.
+        const suffix = parts[0] === ''
+        const start = suffix
+          ? Math.max(0, totalSize - (parseInt(parts[1], 10) || 0))
+          : parseInt(parts[0], 10) || 0
+        const end = suffix || !parts[1]
+          ? totalSize - 1
+          : Math.min(parseInt(parts[1], 10), totalSize - 1)
 
-        if (start >= totalSize || end >= totalSize) {
+        if (!Number.isFinite(start) || start >= totalSize || start > end) {
           reply.header('Content-Range', `bytes */${totalSize}`)
           return reply.code(416).send('Requested range not satisfiable')
         }
@@ -157,8 +165,14 @@ export default async function messageRoutes(fastify) {
       reply.header('Content-Length', totalSize)
       return reply.send(buffer)
     } catch (err) {
-      request.log.error(err, 'Failed to download media')
-      return reply.code(500).send({ error: 'Failed to download media', code: 'MEDIA_DOWNLOAD_FAILED' })
+      // Say what actually went wrong. A blanket 500 gave the console nothing
+      // to show and left the reason only in the server log.
+      request.log.error({ err: err.message, cause: err.cause?.message, id }, 'media download failed')
+      const status = err instanceof MediaUnavailableError ? (err.status ?? 502) : 502
+      return reply.code(status).send({
+        error: err.message || 'Failed to download media',
+        code: 'MEDIA_DOWNLOAD_FAILED',
+      })
     }
   })
 

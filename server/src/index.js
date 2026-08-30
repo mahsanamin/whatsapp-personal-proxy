@@ -8,6 +8,7 @@ import { EventEmitter } from 'node:events'
 import { config } from './config.js'
 import { db } from './db/index.js'
 import { SqliteSessionStore } from './db/sessionStore.js'
+import { repairMessageTimestamps } from './db/repair.js'
 import { requireSession } from './middleware/session.js'
 import { createWAClient } from './wa/client.js'
 
@@ -34,6 +35,14 @@ const fastify = Fastify({
   },
   trustProxy: true,
 })
+
+// Correct any send times that ingestion previously got wrong. Cheap once the
+// data is clean, and it saves a full re-sync to recover the real chronology.
+{
+  const { repaired, error } = repairMessageTimestamps()
+  if (error) fastify.log.warn({ error }, 'timestamp repair failed')
+  else if (repaired > 0) fastify.log.warn({ repaired }, 'restored real send times from stored payloads')
+}
 
 // Event bus for WA events → WS broadcast
 const eventBus = new EventEmitter()

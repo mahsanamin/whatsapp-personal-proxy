@@ -96,3 +96,66 @@ test('images, video and audio play in the console rather than only linking', () 
   assert.ok(block.includes('<video'), 'video no longer plays inline')
   assert.ok(block.includes('<audio'), 'voice notes must be playable without downloading them')
 })
+
+test('send times come from the payload, not from when we happened to ingest it', () => {
+  const src = read('../src/wa/client.js')
+  assert.ok(
+    !src.includes("typeof raw.messageTimestamp === 'number'"),
+    'messageTimestamp is a 64-bit protobuf value: a string on history sync, a Long ' +
+    'when live, never a plain number. Testing for `number` stamps every message ' +
+    'with the moment it was ingested and collapses all history onto one instant',
+  )
+  assert.ok(
+    src.includes('toNumber(raw.messageTimestamp)'),
+    'the timestamp must go through the same coercion as every other protobuf number',
+  )
+})
+
+test('mis-stamped history can be repaired from the stored payloads', () => {
+  const src = read('../src/db/repair.js')
+  assert.ok(src.includes('messageTimestamp'), 'the timestamp repair is gone')
+  assert.ok(
+    src.includes('timestamp <> strftime'),
+    'the repair must be idempotent, rewriting only rows that are actually wrong',
+  )
+  assert.ok(
+    read('../src/index.js').includes('repairMessageTimestamps'),
+    'the repair is never run',
+  )
+})
+
+test('media re-upload is attempted on any failure, not a guessed status shape', () => {
+  const src = read('../src/wa/media.js')
+  assert.ok(
+    !/err\?\.response\?\.status \|\| err\?\.status/.test(src),
+    'Baileys throws Boom (err.output.statusCode); checking only the axios shape ' +
+    'against a fixed list means the updateMediaMessage recovery never runs',
+  )
+  assert.ok(src.includes('updateMediaMessage'), 'the re-upload recovery is gone')
+  assert.ok(src.includes('output?.statusCode'), 'Boom status codes are ignored again')
+})
+
+test('an empty download is a failure, never something to cache', () => {
+  const src = read('../src/wa/media.js')
+  assert.ok(
+    src.includes('buffer.length === 0') || src.includes('length === 0'),
+    'a zero-length body served as media is undecodable, and caching it makes that permanent',
+  )
+})
+
+test('viewing media does not silently persist it', () => {
+  const src = read('../src/wa/media.js')
+  assert.ok(
+    src.includes('opts.saveToDisk'),
+    'saveToDisk must be honoured: /media/save is the explicit "keep a copy" action, ' +
+    'and media_saved has to keep meaning that',
+  )
+})
+
+test('a media failure reports why', () => {
+  const src = read('../src/api/messages.js')
+  assert.ok(
+    src.includes('MediaUnavailableError'),
+    'the route must distinguish "gone" from "broken" instead of returning a blanket 500',
+  )
+})

@@ -525,8 +525,14 @@ function normalizeMessage(raw) {
 
   const quotedId = msg.reactionMessage?.key?.id || msg.extendedTextMessage?.contextInfo?.stanzaId || null
   const mentioned = key.fromMe ? 0 : (mentionsMe(msg) ? 1 : 0)
-  const timestamp = typeof raw.messageTimestamp === 'number'
-    ? new Date(raw.messageTimestamp * 1000).toISOString()
+  // messageTimestamp is a protobuf 64-bit value: it arrives as a string on a
+  // history sync and as a Long on live messages, never as a plain number. The
+  // old `typeof === 'number'` test therefore failed for every message and
+  // stamped them all with the moment they were ingested, collapsing years of
+  // history onto the instant the account was linked.
+  const sentAt = toNumber(raw.messageTimestamp)
+  const timestamp = sentAt
+    ? new Date(sentAt * 1000).toISOString()
     : new Date().toISOString()
 
   return {

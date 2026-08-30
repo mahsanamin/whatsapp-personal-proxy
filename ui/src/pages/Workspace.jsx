@@ -78,7 +78,23 @@ function ChannelRow({ channel, active, onClick, onDragStart }) {
 
 function MediaBlock({ msg, label }) {
   const [hasError, setHasError] = useState(false)
+  const [reason, setReason] = useState(null)
   const [retryKey, setRetryKey] = useState(0)
+
+  // The element's onError says nothing about why. Ask the endpoint directly so
+  // the chip can name the cause instead of leaving it in the server log.
+  const explainFailure = async () => {
+    setHasError(true)
+    try {
+      const res = await fetch(src, { credentials: 'include' })
+      if (!res.ok) {
+        const body = await res.json().catch(() => null)
+        setReason(body?.error || `HTTP ${res.status}`)
+      }
+    } catch (_) {
+      setReason('could not reach the server')
+    }
+  }
   const src = `/api/channels/${encodeURIComponent(msg.jid)}/messages/${msg.id}/media`
   const srcWithRetry = retryKey > 0 ? `${src}?t=${retryKey}` : src
   const size = msg.media_size > 0 ? `${(msg.media_size / 1024).toFixed(0)} KB` : null
@@ -89,9 +105,12 @@ function MediaBlock({ msg, label }) {
         <span>⚠️</span>
         <span className="text-neutral-300 font-medium">{label || 'Media'}</span>
         <span className="text-neutral-500">{size ? `(${size})` : '(unavailable)'}</span>
+        {reason && (
+          <span className="text-neutral-500 truncate max-w-[220px]" title={reason}>— {reason}</span>
+        )}
         <button
           type="button"
-          onClick={() => { setHasError(false); setRetryKey(k => k + 1) }}
+          onClick={() => { setHasError(false); setReason(null); setRetryKey(k => k + 1) }}
           className="text-accent hover:text-accent-hover text-[11px] underline ml-auto cursor-pointer"
         >
           Retry
@@ -108,7 +127,7 @@ function MediaBlock({ msg, label }) {
           src={srcWithRetry}
           alt={label}
           loading="lazy"
-          onError={() => setHasError(true)}
+          onError={explainFailure}
           className={msg.type === 'sticker'
             ? 'w-32 h-32 object-contain my-1'
             : 'rounded-lg max-w-[320px] max-h-[340px] object-cover my-1'}
@@ -124,7 +143,7 @@ function MediaBlock({ msg, label }) {
         src={srcWithRetry}
         controls
         preload="metadata"
-        onError={() => setHasError(true)}
+        onError={explainFailure}
         className="rounded-lg max-w-[320px] max-h-[340px] my-1"
       />
     )
@@ -138,7 +157,7 @@ function MediaBlock({ msg, label }) {
           src={srcWithRetry}
           controls
           preload="metadata"
-          onError={() => setHasError(true)}
+          onError={explainFailure}
           className="w-full h-9"
         />
         <span className="text-[10px] text-neutral-500">
