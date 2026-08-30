@@ -22,6 +22,33 @@ function withReactions(messages) {
 
   const visible = messages.filter(m => m.type !== 'reaction')
 
+  // An album is only a count; its photos arrive as separate messages that the
+  // container does not reference. If those were never stored there is nothing
+  // to link to and nothing to fetch, so say how many actually survived rather
+  // than showing a bare "Album — 4 items" that looks like a loading failure.
+  const albums = visible.filter(m => m.type === 'album')
+  if (albums.length > 0) {
+    const countChildren = db.prepare(`
+      SELECT COUNT(*) AS c FROM messages
+      WHERE jid = ? AND media_key IS NOT NULL AND timestamp BETWEEN ? AND ?
+    `)
+    // The window is computed here, not in SQL: stored timestamps are ISO
+    // strings ending in Z, which SQLite's datetime() does not parse — it
+    // returns null and the comparison silently matches nothing.
+    for (const album of albums) {
+      try {
+        const at = new Date(album.timestamp).getTime()
+        album.children_available = countChildren.get(
+          album.jid,
+          new Date(at - 90_000).toISOString(),
+          new Date(at + 90_000).toISOString(),
+        ).c
+      } catch (_) {
+        album.children_available = null
+      }
+    }
+  }
+
   // Attach the sender's name so callers do not each have to reimplement the
   // lid_map lookup to avoid showing a raw JID.
   const names = resolveNames(visible.map(m => m.from_jid))

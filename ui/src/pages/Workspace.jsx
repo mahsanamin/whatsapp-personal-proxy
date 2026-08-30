@@ -218,6 +218,12 @@ function MessageBubble({ msg, prevMsg, isGroupChat }) {
               else falls back to a labelled link. */}
           {isMedia && <MediaBlock msg={msg} label={mediaLabels[msg.type] || msg.type} />}
           {msg.body && <p className="whitespace-pre-wrap break-words">{msg.body}</p>}
+          {msg.type === 'album' && msg.children_available === 0 && (
+            <p className="text-[11px] text-neutral-500 mt-1">
+              Not captured — these arrived before media was being kept, and WhatsApp
+              no longer has them. Forwarding them from your phone brings them across.
+            </p>
+          )}
           <span className={`text-[10px] float-right ml-3 mt-1 ${isMe ? 'text-accent/40' : 'text-neutral-600'}`}>
             {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           </span>
