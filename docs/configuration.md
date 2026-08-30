@@ -31,6 +31,24 @@ On a headless box there is no browser on `localhost`, so a loopback bind looks h
 in every local check and is unreachable from anywhere else. Bind to the address other
 machines actually use.
 
+## Keeping media
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `MEDIA_AUTO_DOWNLOAD` | `0` | Save media to disk as it arrives |
+| `MEDIA_AUTO_DOWNLOAD_MAX_MB` | `25` | Skip anything larger. `0` removes the limit |
+
+WhatsApp removes media from its CDN after a while. With this off, bytes are
+fetched only when something asks for them — and by then a download frequently
+returns `403`, leaving only a re-upload request to the phone, which it often
+ignores. **Media not kept on arrival is usually gone for good.**
+
+Turn it on if the media in your chats matters. `data/media/` will grow roughly
+in step with what you receive.
+
+`wpp media export <chat>` pulls everything in one conversation to your machine,
+and reports whatever WhatsApp would no longer supply instead of failing.
+
 ## Rate limits
 
 | Variable | Default | Purpose |

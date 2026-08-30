@@ -365,6 +365,7 @@ export async function createWAClient(sessionPath, eventBus) {
         const normalized = normalizeMessage(msg)
         if (!normalized) continue
         saveMessage(normalized)
+        archiveMedia(normalized)
       } catch (_) {}
     }
   })
@@ -388,6 +389,7 @@ export async function createWAClient(sessionPath, eventBus) {
         const normalized = normalizeMessage(msg)
         if (!normalized) continue
         saveMessage(normalized)
+        archiveMedia(normalized)
         // Broadcast the address the chat is filed under as well as the one the
         // message arrived on, so a subscriber can tell they are the same
         // conversation without repeating the lid_map lookup itself.
@@ -543,6 +545,18 @@ export function normalizeMessage(raw) {
     mediaSha256 = msg.stickerMessage.fileSha256 ? Buffer.from(msg.stickerMessage.fileSha256).toString('hex') : null
     mediaKey = msg.stickerMessage.mediaKey ? Buffer.from(msg.stickerMessage.mediaKey).toString('base64') : null
     mediaUrl = msg.stickerMessage.url
+  } else if (msg.albumMessage) {
+    // The container for a set of photos sent together. It carries no media of
+    // its own — each item arrives as a separate associatedChildMessage — but
+    // recording it means an album whose children are missing still shows up
+    // instead of vanishing.
+    type = 'album'
+    // expectedImageCount counts every visual tile, videos included — an album
+    // of five one-second clips reports five images — so say "items" rather
+    // than claim a kind the count cannot actually distinguish.
+    const items = (toNumber(msg.albumMessage.expectedImageCount) || 0) +
+      (toNumber(msg.albumMessage.expectedVideoCount) || 0)
+    body = items ? `Album — ${items} item${items === 1 ? '' : 's'}` : 'Album'
   } else if (msg.locationMessage || msg.liveLocationMessage) {
     const loc = msg.locationMessage || msg.liveLocationMessage
     type = 'location'
@@ -591,6 +605,35 @@ export function normalizeMessage(raw) {
     mentions_me: mentioned,
     raw_json: JSON.stringify(raw, BufferJSON.replacer),
   }
+}
+
+/**
+ * Keep a copy while WhatsApp still has one.
+ *
+ * Media lives on WhatsApp's CDN for a limited time; after that a download
+ * returns 403 and the only recourse is asking the phone to re-upload, which it
+ * frequently declines or ignores. Anything not archived on arrival is likely to
+ * be unrecoverable later, so this is opt-in but strongly recommended for an
+ * account whose media matters.
+ *
+ * Deliberately fire-and-forget: archiving must never delay or fail ingestion.
+ */
+function archiveMedia(msg) {
+  if (!config.mediaAutoDownload) return
+  if (!msg.media_key) return
+  if (config.mediaAutoDownloadMaxBytes > 0 &&
+      msg.media_size > config.mediaAutoDownloadMaxBytes) return
+
+  setImmediate(async () => {
+    try {
+      const { downloadMediaOnDemand } = await import('./media.js')
+      const row = db.prepare('SELECT * FROM messages WHERE id = ?').get(msg.id)
+      if (!row || row.media_saved) return
+      await downloadMediaOnDemand(row, { saveToDisk: true })
+    } catch (err) {
+      logger.warn({ id: msg.id, type: msg.type, err: err.message }, 'could not archive media on arrival')
+    }
+  })
 }
 
 function saveMessage(msg) {

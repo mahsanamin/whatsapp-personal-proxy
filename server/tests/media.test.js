@@ -223,3 +223,27 @@ test('a whole conversation of media can be exported at once', () => {
   assert.ok(cli.includes('"export"'), 'the bulk media export is gone')
   assert.ok(cli.includes('skipped_existing'), 'export must be resumable rather than refetching everything')
 })
+
+test('media can be archived on arrival, while WhatsApp still has it', () => {
+  const cfg = read('../src/config.js')
+  assert.ok(cfg.includes('mediaAutoDownload'), 'the archive-on-arrival option is gone')
+  const client = read('../src/wa/client.js')
+  assert.ok(
+    client.includes('archiveMedia'),
+    'WhatsApp expires media from its CDN; anything not kept on arrival is likely ' +
+    'unrecoverable, since the phone often will not re-upload it',
+  )
+  assert.ok(
+    client.includes('setImmediate'),
+    'archiving must never delay or fail ingestion',
+  )
+})
+
+test('an album is recorded even when its children are missing', () => {
+  const src = read('../src/wa/client.js')
+  assert.ok(src.includes("type = 'album'"), 'albums fall back to unknown again')
+  assert.ok(
+    !src.includes('photo${images === 1'),
+    'expectedImageCount counts videos too, so the label must not claim a kind',
+  )
+})

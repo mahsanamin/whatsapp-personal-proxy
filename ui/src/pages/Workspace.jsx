@@ -183,8 +183,13 @@ function MediaBlock({ msg, label }) {
 
 function MessageBubble({ msg, prevMsg, isGroupChat }) {
   const isMe = msg.is_from_me
-  const isMedia = msg.type !== 'text' && msg.type !== 'reaction' && msg.type !== 'unknown'
-  const mediaLabels = { image: 'Photo', video: 'Video', doc: 'Document', audio: 'Audio', sticker: 'Sticker' }
+  // An album has no media of its own; its body already says what it holds.
+  const isMedia = !['text', 'reaction', 'unknown', 'album', 'location', 'contact', 'deleted']
+    .includes(msg.type)
+  const mediaLabels = {
+    image: 'Photo', video: 'Video', doc: 'Document',
+    audio: 'Audio', voice: 'Voice note', sticker: 'Sticker',
+  }
   // Only groups need a sender label; in a one-to-one chat there is exactly one
   // other person and naming them above every bubble is noise.
   // Coerced: is_from_me is SQLite's 0/1, and `a && b && 0` evaluates to 0,

@@ -40,6 +40,12 @@ export const config = {
   personalNumbers: process.env.PERSONAL_NUMBERS.split(',').map(n => n.trim()),
   publicUrl,
   cookieSecure,
+  // WhatsApp expires media from its CDN. Fetching only on demand means that by
+  // the time anyone asks, the bytes are often already gone and recovery depends
+  // on the phone agreeing to re-upload. Archiving on arrival is the only way to
+  // reliably keep it.
+  mediaAutoDownload: process.env.MEDIA_AUTO_DOWNLOAD === '1' || process.env.MEDIA_AUTO_DOWNLOAD === 'true',
+  mediaAutoDownloadMaxBytes: Math.max(0, parseInt(process.env.MEDIA_AUTO_DOWNLOAD_MAX_MB || '25', 10)) * 1024 * 1024,
   rateLimitLogin: parseInt(process.env.RATE_LIMIT_LOGIN || '10', 10),
   rateLimitSend: parseInt(process.env.RATE_LIMIT_SEND || '60', 10),
 }
