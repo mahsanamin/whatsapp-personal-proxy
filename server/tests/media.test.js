@@ -251,3 +251,13 @@ test('an album is recorded even when its children are missing', () => {
     'expectedImageCount counts videos too, so the label must not claim a kind',
   )
 })
+
+test('a refused re-upload is read, not waited out', () => {
+  const src = read('../src/wa/media.js')
+  assert.ok(
+    src.includes("'CB:ack'") && src.includes('server-error'),
+    "WhatsApp answers a refused retry with <ack type='server-error'>, which Baileys " +
+    'logs as unhandled while it keeps waiting for a notification that never comes — ' +
+    'so a refusal is indistinguishable from a slow phone until the timeout expires',
+  )
+})

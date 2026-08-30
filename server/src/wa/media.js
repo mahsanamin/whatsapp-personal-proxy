@@ -9,6 +9,37 @@ import { db } from '../db/index.js'
 // re-upload usually can succeed — but only once the phone wakes, re-encrypts
 // and uploads. Configurable via MEDIA_REUPLOAD_TIMEOUT_S.
 
+/**
+ * Watch for WhatsApp rejecting a media retry.
+ *
+ * The reply to a retry request is an <ack class="receipt" type="server-error">
+ * carrying the message id. Baileys waits only for the media-update
+ * notification and logs that ack as "unhandled", so a refusal reads exactly
+ * like a phone that never answered — the request sat until it timed out.
+ * Listening for it turns a two-minute hang into an immediate, accurate answer.
+ */
+function watchForRejection(sock, messageId) {
+  let cleanup = () => {}
+  const rejected = new Promise((_, reject) => {
+    const onAck = (node) => {
+      if (node?.attrs?.id !== messageId) return
+      if (node?.attrs?.type !== 'server-error') return
+      reject(new MediaUnavailableError(
+        'WhatsApp refused to re-upload this media (server-error). The copy on ' +
+        'its servers has expired and the phone did not supply a replacement.',
+        { status: 404 },
+      ))
+    }
+    try {
+      sock.ws.on('CB:ack', onAck)
+      cleanup = () => { try { sock.ws.off('CB:ack', onAck) } catch (_) {} }
+    } catch (_) {
+      // If the raw frame stream is unavailable, fall back to the timeout.
+    }
+  })
+  return { rejected, cleanup }
+}
+
 function withTimeout(promise, ms, message) {
   return Promise.race([
     promise,
@@ -129,12 +160,16 @@ export async function downloadMediaOnDemand(msgRow, opts = {}) {
     // Bounded explicitly: the socket runs with no default query timeout (so a
     // full history sync is not cut short), which would otherwise let a phone
     // that never answers hold this request open indefinitely.
+    const watcher = watchForRejection(sock, msgRow.id)
     try {
-      raw = await withTimeout(
-        sock.updateMediaMessage(raw),
-        config.mediaReuploadTimeoutMs,
-        'the phone did not answer the re-upload request in time',
-      )
+      raw = await Promise.race([
+        withTimeout(
+          sock.updateMediaMessage(raw),
+          config.mediaReuploadTimeoutMs,
+          'the phone did not answer the re-upload request in time',
+        ),
+        watcher.rejected,
+      ])
       buffer = await downloadMediaMessage(raw, 'buffer', {})
       if (!buffer || buffer.length === 0) {
         throw new MediaUnavailableError('Re-upload produced an empty file', { status: 502 })
@@ -144,11 +179,14 @@ export async function downloadMediaOnDemand(msgRow, opts = {}) {
       db.prepare('UPDATE messages SET raw_json = ? WHERE id = ?')
         .run(JSON.stringify(raw, BufferJSON.replacer), msgRow.id)
     } catch (retryErr) {
+      if (retryErr instanceof MediaUnavailableError) throw retryErr
       const status = statusOf(retryErr) ?? statusOf(firstError)
       throw new MediaUnavailableError(
         `WhatsApp could not supply this media: ${retryErr.message || firstError.message}`,
         { status: status === 404 || status === 410 ? 404 : 502, cause: retryErr },
       )
+    } finally {
+      watcher.cleanup()
     }
   }
 

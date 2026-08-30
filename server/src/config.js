@@ -49,6 +49,9 @@ export const config = {
   // The phone keeps its own copy, so this usually can succeed — but it has to
   // wake up, re-encrypt and upload, which is slow on a phone that is asleep or
   // on a poor connection.
+  // Baileys' own log level. Raise to 'debug' to see the protocol exchange —
+  // media retries and history syncs are otherwise silent when they fail.
+  waLogLevel: process.env.WA_LOG_LEVEL || 'warn',
   mediaReuploadTimeoutMs: Math.max(5, parseInt(process.env.MEDIA_REUPLOAD_TIMEOUT_S || '120', 10)) * 1000,
   mediaAutoDownloadMaxBytes: Math.max(0, parseInt(process.env.MEDIA_AUTO_DOWNLOAD_MAX_MB || '25', 10)) * 1024 * 1024,
   rateLimitLogin: parseInt(process.env.RATE_LIMIT_LOGIN || '10', 10),

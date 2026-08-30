@@ -50,7 +50,7 @@ function mentionsMe(message) {
   return false
 }
 
-const logger = pino({ level: 'warn' })
+const logger = pino({ level: config.waLogLevel })
 
 export async function createWAClient(sessionPath, eventBus) {
   // Close existing socket to prevent duplicate listeners
