@@ -9,36 +9,14 @@ import { db } from '../db/index.js'
 // re-upload usually can succeed — but only once the phone wakes, re-encrypts
 // and uploads. Configurable via MEDIA_REUPLOAD_TIMEOUT_S.
 
-/**
- * Watch for WhatsApp rejecting a media retry.
- *
- * The reply to a retry request is an <ack class="receipt" type="server-error">
- * carrying the message id. Baileys waits only for the media-update
- * notification and logs that ack as "unhandled", so a refusal reads exactly
- * like a phone that never answered — the request sat until it timed out.
- * Listening for it turns a two-minute hang into an immediate, accurate answer.
+/*
+ * Note on the <ack type="server-error"> frames Baileys logs as "unhandled":
+ * they are NOT rejections. A media-retry request is itself sent as
+ * <receipt type="server-error">, so the ack merely echoes that type back. An
+ * earlier version here treated it as a refusal and failed every retry in under
+ * a second — the opposite of the intended fix. The real answer arrives later
+ * as a separate media-update notification, so waiting is correct.
  */
-function watchForRejection(sock, messageId) {
-  let cleanup = () => {}
-  const rejected = new Promise((_, reject) => {
-    const onAck = (node) => {
-      if (node?.attrs?.id !== messageId) return
-      if (node?.attrs?.type !== 'server-error') return
-      reject(new MediaUnavailableError(
-        'WhatsApp refused to re-upload this media (server-error). The copy on ' +
-        'its servers has expired and the phone did not supply a replacement.',
-        { status: 404 },
-      ))
-    }
-    try {
-      sock.ws.on('CB:ack', onAck)
-      cleanup = () => { try { sock.ws.off('CB:ack', onAck) } catch (_) {} }
-    } catch (_) {
-      // If the raw frame stream is unavailable, fall back to the timeout.
-    }
-  })
-  return { rejected, cleanup }
-}
 
 function withTimeout(promise, ms, message) {
   return Promise.race([
@@ -71,6 +49,43 @@ export class MediaUnavailableError extends Error {
  */
 function statusOf(err) {
   return err?.output?.statusCode ?? err?.response?.status ?? err?.status ?? null
+}
+
+// Protobuf byte fields arrive as base64 strings on a history sync and survive
+// storage that way. Baileys' download path coerces them (getMediaKeys does
+// Buffer.from(..., 'base64')), but its retry path does not: getMediaRetryKey
+// runs HKDF straight over whatever it is given. Handed the base64 *text*, it
+// derives a different key, so the retry receipt is encrypted with the wrong
+// one and WhatsApp answers server-error — which reads exactly like expired
+// media. Restoring the real bytes first is what makes a re-upload possible.
+const BINARY_MEDIA_FIELDS = ['mediaKey', 'fileEncSha256', 'fileSha256', 'thumbnailSha256', 'thumbnailEncSha256']
+
+function restoreBinaryFields(content) {
+  if (!content || typeof content !== 'object') return content
+  for (const field of BINARY_MEDIA_FIELDS) {
+    const value = content[field]
+    if (typeof value === 'string' && value.length > 0) {
+      try {
+        content[field] = Buffer.from(value.replace('data:;base64,', ''), 'base64')
+      } catch (_) {
+        // Leave it alone; a bad value is better than a thrown request
+      }
+    }
+  }
+  return content
+}
+
+// Every media kind Baileys can carry, so the right one gets its bytes restored.
+const MEDIA_CONTENT_KEYS = [
+  'imageMessage', 'videoMessage', 'audioMessage',
+  'documentMessage', 'stickerMessage', 'ptvMessage',
+]
+
+function restoreMediaBinaries(message) {
+  for (const key of MEDIA_CONTENT_KEYS) {
+    if (message?.[key]) restoreBinaryFields(message[key])
+  }
+  return message
 }
 
 // A message id can contain characters that are not safe in a filename.
@@ -127,6 +142,7 @@ export async function downloadMediaOnDemand(msgRow, opts = {}) {
   if (unwrapped && unwrapped !== raw.message) {
     raw = { ...raw, message: unwrapped }
   }
+  restoreMediaBinaries(raw.message)
 
   let buffer
   let firstError = null
@@ -160,16 +176,20 @@ export async function downloadMediaOnDemand(msgRow, opts = {}) {
     // Bounded explicitly: the socket runs with no default query timeout (so a
     // full history sync is not cut short), which would otherwise let a phone
     // that never answers hold this request open indefinitely.
-    const watcher = watchForRejection(sock, msgRow.id)
+    if (process.env.MEDIA_DEBUG === '1') {
+      const c = raw.message?.videoMessage || raw.message?.imageMessage ||
+        raw.message?.audioMessage || raw.message?.documentMessage || raw.message?.stickerMessage
+      console.error('[media-debug] retry for', msgRow.id,
+        '| mediaKey isBuffer =', Buffer.isBuffer(c?.mediaKey),
+        '| len =', c?.mediaKey?.length,
+        '| keys =', Object.keys(raw.message || {}).join(','))
+    }
     try {
-      raw = await Promise.race([
-        withTimeout(
-          sock.updateMediaMessage(raw),
-          config.mediaReuploadTimeoutMs,
-          'the phone did not answer the re-upload request in time',
-        ),
-        watcher.rejected,
-      ])
+      raw = await withTimeout(
+        sock.updateMediaMessage(raw),
+        config.mediaReuploadTimeoutMs,
+        'the phone did not answer the re-upload request in time',
+      )
       buffer = await downloadMediaMessage(raw, 'buffer', {})
       if (!buffer || buffer.length === 0) {
         throw new MediaUnavailableError('Re-upload produced an empty file', { status: 502 })
@@ -185,8 +205,6 @@ export async function downloadMediaOnDemand(msgRow, opts = {}) {
         `WhatsApp could not supply this media: ${retryErr.message || firstError.message}`,
         { status: status === 404 || status === 410 ? 404 : 502, cause: retryErr },
       )
-    } finally {
-      watcher.cleanup()
     }
   }
 

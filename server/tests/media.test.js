@@ -261,3 +261,23 @@ test('a refused re-upload is read, not waited out', () => {
     'so a refusal is indistinguishable from a slow phone until the timeout expires',
   )
 })
+
+test('binary media fields are restored before a re-upload request', () => {
+  const src = read('../src/wa/media.js')
+  assert.ok(
+    src.includes('restoreMediaBinaries') && src.includes('mediaKey'),
+    'mediaKey is stored as base64 text. The download path coerces it, but ' +
+    "Baileys' getMediaRetryKey runs HKDF over whatever it is handed — given the " +
+    'text it derives a different key and the retry receipt is unreadable',
+  )
+})
+
+test('an ack echoing type=server-error is not treated as a refusal', () => {
+  const src = read('../src/wa/media.js')
+  assert.ok(
+    !src.includes('watchForRejection'),
+    'a media-retry request is itself sent as <receipt type="server-error">, so ' +
+    'the matching ack confirms the request rather than refusing it — reading it ' +
+    'as a refusal fails every retry instantly',
+  )
+})
