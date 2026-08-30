@@ -5,9 +5,9 @@ import { config } from '../config.js'
 import { getSock, unwrapMessage } from './client.js'
 import { db } from '../db/index.js'
 
-// Long enough for a phone on a slow link, short enough that a bulk export does
-// not stall on one dead item.
-const REUPLOAD_TIMEOUT_MS = 45_000
+// The phone holds its own copy of every photo it sent or received, so a
+// re-upload usually can succeed — but only once the phone wakes, re-encrypts
+// and uploads. Configurable via MEDIA_REUPLOAD_TIMEOUT_S.
 
 function withTimeout(promise, ms, message) {
   return Promise.race([
@@ -132,7 +132,7 @@ export async function downloadMediaOnDemand(msgRow, opts = {}) {
     try {
       raw = await withTimeout(
         sock.updateMediaMessage(raw),
-        REUPLOAD_TIMEOUT_MS,
+        config.mediaReuploadTimeoutMs,
         'the phone did not answer the re-upload request in time',
       )
       buffer = await downloadMediaMessage(raw, 'buffer', {})

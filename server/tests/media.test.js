@@ -207,9 +207,13 @@ test('downloads unwrap the same envelopes the parser does', () => {
 test('a phone that never answers cannot hold a request open', () => {
   const src = read('../src/wa/media.js')
   assert.ok(
-    src.includes('REUPLOAD_TIMEOUT_MS') && src.includes('withTimeout'),
+    src.includes('withTimeout') && src.includes('mediaReuploadTimeoutMs'),
     'the socket runs with no default query timeout, so the re-upload wait must ' +
     'be bounded here or the request hangs until the proxy gives up',
+  )
+  assert.ok(
+    read('../src/config.js').includes('MEDIA_REUPLOAD_TIMEOUT_S'),
+    'the wait must be tunable: how long a phone needs is not knowable in advance',
   )
   const nginx = readFileSync(new URL('../../nginx/nginx.conf', import.meta.url), 'utf8')
   assert.ok(

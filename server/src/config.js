@@ -45,6 +45,11 @@ export const config = {
   // on the phone agreeing to re-upload. Archiving on arrival is the only way to
   // reliably keep it.
   mediaAutoDownload: process.env.MEDIA_AUTO_DOWNLOAD === '1' || process.env.MEDIA_AUTO_DOWNLOAD === 'true',
+  // How long to wait for the phone to re-upload media WhatsApp has dropped.
+  // The phone keeps its own copy, so this usually can succeed — but it has to
+  // wake up, re-encrypt and upload, which is slow on a phone that is asleep or
+  // on a poor connection.
+  mediaReuploadTimeoutMs: Math.max(5, parseInt(process.env.MEDIA_REUPLOAD_TIMEOUT_S || '120', 10)) * 1000,
   mediaAutoDownloadMaxBytes: Math.max(0, parseInt(process.env.MEDIA_AUTO_DOWNLOAD_MAX_MB || '25', 10)) * 1024 * 1024,
   rateLimitLogin: parseInt(process.env.RATE_LIMIT_LOGIN || '10', 10),
   rateLimitSend: parseInt(process.env.RATE_LIMIT_SEND || '60', 10),
