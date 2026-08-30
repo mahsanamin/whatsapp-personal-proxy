@@ -111,7 +111,7 @@ export default async function messageRoutes(fastify) {
     }))
   })
 
-  // Stream media on demand — does NOT write to disk
+  // Stream media on demand — cached to disk
   fastify.get('/channels/:jid/messages/:id/media', {
     preHandler: requireScope('channels:read'),
   }, async (request, reply) => {
@@ -128,10 +128,36 @@ export default async function messageRoutes(fastify) {
 
     try {
       const { buffer } = await downloadMediaOnDemand(msg)
-      reply.header('Content-Type', msg.media_mime || 'application/octet-stream')
+      const mime = msg.media_mime || 'application/octet-stream'
+      const totalSize = buffer.length
+      const range = request.headers.range
+
+      reply.header('Accept-Ranges', 'bytes')
+      reply.header('Content-Type', mime)
       reply.header('Content-Disposition', 'inline')
+      reply.header('Cache-Control', 'public, max-age=86400')
+
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-')
+        const start = parseInt(parts[0], 10) || 0
+        const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1
+
+        if (start >= totalSize || end >= totalSize) {
+          reply.header('Content-Range', `bytes */${totalSize}`)
+          return reply.code(416).send('Requested range not satisfiable')
+        }
+
+        const chunk = buffer.subarray(start, end + 1)
+        reply.code(206)
+        reply.header('Content-Range', `bytes ${start}-${end}/${totalSize}`)
+        reply.header('Content-Length', chunk.length)
+        return reply.send(chunk)
+      }
+
+      reply.header('Content-Length', totalSize)
       return reply.send(buffer)
     } catch (err) {
+      request.log.error(err, 'Failed to download media')
       return reply.code(500).send({ error: 'Failed to download media', code: 'MEDIA_DOWNLOAD_FAILED' })
     }
   })

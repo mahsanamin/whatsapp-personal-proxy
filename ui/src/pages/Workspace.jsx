@@ -77,16 +77,38 @@ function ChannelRow({ channel, active, onClick, onDragStart }) {
 }
 
 function MediaBlock({ msg, label }) {
+  const [hasError, setHasError] = useState(false)
+  const [retryKey, setRetryKey] = useState(0)
   const src = `/api/channels/${encodeURIComponent(msg.jid)}/messages/${msg.id}/media`
+  const srcWithRetry = retryKey > 0 ? `${src}?t=${retryKey}` : src
   const size = msg.media_size > 0 ? `${(msg.media_size / 1024).toFixed(0)} KB` : null
+
+  if (hasError) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-neutral-400 bg-neutral-900/40 px-2.5 py-1.5 rounded-lg border border-neutral-700/50 my-1 min-w-[200px]">
+        <span>⚠️</span>
+        <span className="text-neutral-300 font-medium">{label || 'Media'}</span>
+        <span className="text-neutral-500">{size ? `(${size})` : '(unavailable)'}</span>
+        <button
+          type="button"
+          onClick={() => { setHasError(false); setRetryKey(k => k + 1) }}
+          className="text-accent hover:text-accent-hover text-[11px] underline ml-auto cursor-pointer"
+        >
+          Retry
+        </button>
+      </div>
+    )
+  }
 
   if (msg.type === 'image' || msg.type === 'sticker') {
     return (
       <a href={src} target="_blank" rel="noreferrer" className="block">
         <img
-          src={src}
+          key={retryKey}
+          src={srcWithRetry}
           alt={label}
           loading="lazy"
+          onError={() => setHasError(true)}
           className={msg.type === 'sticker'
             ? 'w-32 h-32 object-contain my-1'
             : 'rounded-lg max-w-[320px] max-h-[340px] object-cover my-1'}
@@ -96,13 +118,29 @@ function MediaBlock({ msg, label }) {
   }
 
   if (msg.type === 'video') {
-    return <video src={src} controls preload="metadata" className="rounded-lg max-w-[320px] my-1" />
+    return (
+      <video
+        key={retryKey}
+        src={srcWithRetry}
+        controls
+        preload="metadata"
+        onError={() => setHasError(true)}
+        className="rounded-lg max-w-[320px] max-h-[340px] my-1"
+      />
+    )
   }
 
   if (msg.type === 'audio' || msg.type === 'voice') {
     return (
       <div className="my-1 min-w-[240px]">
-        <audio src={src} controls preload="none" className="w-full h-9" />
+        <audio
+          key={retryKey}
+          src={srcWithRetry}
+          controls
+          preload="metadata"
+          onError={() => setHasError(true)}
+          className="w-full h-9"
+        />
         <span className="text-[10px] text-neutral-500">
           {msg.type === 'voice' ? 'Voice note' : 'Audio'}{size ? ` · ${size}` : ''}
         </span>
