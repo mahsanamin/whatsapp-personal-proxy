@@ -19,7 +19,7 @@ linked to); every other machine drives it through the `wpp` CLI over REST.
 - **nginx/** — edge proxy: `/api/*` and `/ws` → server, `/*` → ui
 
 Routes are declared without the `/api` prefix; nginx strips it. Both the UI container
-and the Vite dev server listen on **5173**, so `nginx/nginx.conf` has one upstream that
+and the Vite dev server listen on **5973**, so `nginx/nginx.conf` has one upstream that
 is right in development and production.
 
 ## Auth model

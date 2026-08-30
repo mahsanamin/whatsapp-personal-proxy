@@ -28,7 +28,7 @@ leaked personal data. Enable it once: `git config core.hooksPath .githooks`.
   owner. A route guarded only by `requireSession` is therefore console-only.
 - **`/api/cli/wpp` is unauthenticated.** A new machine needs the script before it has a
   token, and the script holds no secrets.
-- **The UI container listens on 5173, not 80.** So one nginx upstream is correct in both
+- **The UI container listens on 5973, not 80.** So one nginx upstream is correct in both
   development and production.
 - **Message ingestion swallows per-message errors.** WhatsApp sends message types this
   code has never seen; one bad payload must not kill the socket.

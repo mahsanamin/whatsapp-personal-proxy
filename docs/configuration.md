@@ -17,7 +17,7 @@ bad configuration rather than running insecurely.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `PUBLIC_URL` | `http://localhost:3300` | How the console and CLI reach this server. Used for the secure-cookie decision and for the CLI install command shown in the console |
+| `PUBLIC_URL` | `http://localhost:3900` | How the console and CLI reach this server. Used for the secure-cookie decision and for the CLI install command shown in the console |
 | `BIND_HOST` | `127.0.0.1` | What the edge nginx binds to on the host |
 | `COOKIE_SECURE` | auto | `1` forces the `Secure` cookie flag. Left blank, it is derived from whether `PUBLIC_URL` is HTTPS |
 
@@ -47,24 +47,24 @@ Set by `docker-compose.yml`; only change them if you are running outside Docker.
 | `DB_PATH` | `/data/db/wpp.db` |
 | `WA_SESSION_PATH` | `/data/wa-session` |
 | `MEDIA_PATH` | `/data/media` |
-| `PORT` | `3000` |
+| `PORT` | `3901` |
 | `CLI_PATH` | unset — the server finds the bundled `wpp` itself |
 
 All three data paths are bind-mounted from `./data/` on the host.
 
 ## Putting it on the internet
 
-Pick one; never expose `:3300` directly.
+Pick one; never expose `:3900` directly.
 
 **Tailscale** (simplest):
 
 ```bash
-tailscale serve --bg --https=443 http://127.0.0.1:3300
+tailscale serve --bg --https=443 http://127.0.0.1:3900
 ```
 
 Set `PUBLIC_URL` to the resulting `https://your-host.tail-xxxx.ts.net` and restart.
 
-**Host nginx with a real certificate**: proxy to `127.0.0.1:3300`, forwarding `Host`,
+**Host nginx with a real certificate**: proxy to `127.0.0.1:3900`, forwarding `Host`,
 `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto`, and the `Upgrade`/`Connection`
 headers for the WebSocket. See the README for a full server block.
 

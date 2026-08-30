@@ -14,13 +14,13 @@ Python 3.9 or newer is the only requirement. Copy the install command shown unde
 
 ```bash
 mkdir -p ~/.local/bin
-curl -fsSL http://SERVER:3300/api/cli/wpp -o ~/.local/bin/wpp && chmod 755 ~/.local/bin/wpp
+curl -fsSL http://SERVER:3900/api/cli/wpp -o ~/.local/bin/wpp && chmod 755 ~/.local/bin/wpp
 ```
 
 For a system-wide install:
 
 ```bash
-sudo curl -fsSL http://SERVER:3300/api/cli/wpp -o /usr/local/bin/wpp && sudo chmod 755 /usr/local/bin/wpp
+sudo curl -fsSL http://SERVER:3900/api/cli/wpp -o /usr/local/bin/wpp && sudo chmod 755 /usr/local/bin/wpp
 ```
 
 From a repository checkout, `./wpp install --path /usr/local/bin/wpp` does the same.
@@ -29,7 +29,7 @@ In the web console open **API Keys**, create one key for this machine or agent, 
 it. Then connect; the prompt hides the token:
 
 ```bash
-wpp connect http://SERVER:3300
+wpp connect http://SERVER:3900
 ```
 
 The connection is tested against `/api/auth/test` before it is saved, so a bad URL or a
@@ -40,7 +40,7 @@ machine** so one can be revoked without disturbing the others.
 Named profiles support more than one server or identity:
 
 ```bash
-wpp connect http://SERVER:3300 --name home
+wpp connect http://SERVER:3900 --name home
 wpp profiles
 wpp use home
 wpp --profile home status
@@ -49,7 +49,7 @@ wpp --profile home status
 Non-interactive setups can pipe the token instead of typing it:
 
 ```bash
-echo "$WPP_TOKEN" | wpp connect http://SERVER:3300 --token-stdin
+echo "$WPP_TOKEN" | wpp connect http://SERVER:3900 --token-stdin
 ```
 
 ## Catching up

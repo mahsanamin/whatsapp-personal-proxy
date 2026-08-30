@@ -22,14 +22,14 @@ if (process.env.JWT_SECRET === 'replace_with_random_secret' || process.env.JWT_S
   process.exit(1)
 }
 
-const publicUrl = process.env.PUBLIC_URL || 'http://localhost:3300'
+const publicUrl = process.env.PUBLIC_URL || 'http://localhost:3900'
 const cookieSecureExplicit = process.env.COOKIE_SECURE
 const cookieSecure = cookieSecureExplicit === undefined || cookieSecureExplicit === ''
   ? publicUrl.startsWith('https://')
   : cookieSecureExplicit === '1' || cookieSecureExplicit === 'true'
 
 export const config = {
-  port: parseInt(process.env.PORT || '3000', 10),
+  port: parseInt(process.env.PORT || '3901', 10),
   nodeEnv: process.env.NODE_ENV || 'development',
   dbPath: process.env.DB_PATH || './data/db/wpp.db',
   waSessionPath: process.env.WA_SESSION_PATH || './data/wa-session',

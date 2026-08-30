@@ -59,7 +59,7 @@ def load_config(required=False):
     if not DEFAULT_CONFIG.exists():
         if required:
             raise WppError(
-                "No connection configured. Run: wpp connect http://SERVER:3300",
+                "No connection configured. Run: wpp connect http://SERVER:3900",
                 "NOT_CONNECTED",
             )
         return {"version": 1, "current": None, "profiles": {}}
@@ -834,7 +834,7 @@ def build_parser():
     sub.add_parser = add_parser
 
     p = sub.add_parser("connect", help="Test and securely save a server connection")
-    p.add_argument("url", help="Server root, e.g. http://SERVER:3300")
+    p.add_argument("url", help="Server root, e.g. http://SERVER:3900")
     p.add_argument("--name", default="default", help="Profile name (default: default)")
     p.add_argument("--token-stdin", action="store_true", help="Read the API token from the first stdin line")
     p.add_argument("--insecure", action="store_true", help="Allow a self-signed HTTPS certificate")

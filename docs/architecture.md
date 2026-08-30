@@ -8,9 +8,9 @@ flowchart LR
     WA[("WhatsApp<br/>servers")]
 
     subgraph Host["The one machine that runs WPP"]
-        Nginx["wpp-nginx :3300"]
-        Server["wpp-server<br/>Fastify :3000"]
-        UI["wpp-ui<br/>React build :5173"]
+        Nginx["wpp-nginx :3900"]
+        Server["wpp-server<br/>Fastify :3901"]
+        UI["wpp-ui<br/>React build :5973"]
         DB[("SQLite<br/>data/db/wpp.db")]
         Sess[("WA session<br/>data/wa-session/")]
     end
@@ -44,12 +44,12 @@ flowchart LR
 
 | Service | Stack | Listens |
 |---|---|---|
-| `wpp-server` | Node 20, Fastify, Baileys, better-sqlite3 | 3000 (container) |
-| `wpp-ui` | React 18, Vite, Tailwind | 5173 (container) |
-| `wpp-nginx` | nginx:alpine | 80 → host `${BIND_HOST}:3300` |
+| `wpp-server` | Node 20, Fastify, Baileys, better-sqlite3 | 3901 (container) |
+| `wpp-ui` | React 18, Vite, Tailwind | 5973 (container) |
+| `wpp-nginx` | nginx:alpine | 80 → host `${BIND_HOST}:3900` |
 
-The UI container listens on **5173 in both development and production** — Vite's dev
-port in dev, an nginx `listen 5173` in the built image — so `nginx/nginx.conf` has one
+The UI container listens on **5973 in both development and production** — Vite's dev
+port in dev, an nginx `listen 5973` in the built image — so `nginx/nginx.conf` has one
 upstream that is correct either way.
 
 ## Request paths

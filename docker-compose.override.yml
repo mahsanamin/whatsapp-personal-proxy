@@ -14,4 +14,4 @@ services:
     volumes:
       - ./ui/src:/app/src
     environment:
-      VITE_API_URL: http://server:3000
+      VITE_API_URL: http://server:3901

@@ -83,13 +83,13 @@ class TestConfigStore(CliTestCase):
 
 class TestPersonalRouting(CliTestCase):
     def test_matches_personal_numbers_regardless_of_formatting(self):
-        profile = {"personal_numbers": ["+971501234567", "923001234567"]}
-        self.assertTrue(self.cli.is_personal(profile, "971501234567@s.whatsapp.net"))
-        self.assertTrue(self.cli.is_personal(profile, "923001234567@s.whatsapp.net"))
-        self.assertFalse(self.cli.is_personal(profile, "441234567890@s.whatsapp.net"))
+        profile = {"personal_numbers": ["+15555550100", "15555550101"]}
+        self.assertTrue(self.cli.is_personal(profile, "15555550100@s.whatsapp.net"))
+        self.assertTrue(self.cli.is_personal(profile, "15555550101@s.whatsapp.net"))
+        self.assertFalse(self.cli.is_personal(profile, "15555550199@s.whatsapp.net"))
 
     def test_no_cached_numbers_means_not_personal(self):
-        self.assertFalse(self.cli.is_personal({}, "971501234567@s.whatsapp.net"))
+        self.assertFalse(self.cli.is_personal({}, "15555550100@s.whatsapp.net"))
 
 
 class TestTargetResolution(CliTestCase):

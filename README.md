@@ -40,9 +40,9 @@ with WhatsApp or Meta.
 ```mermaid
 flowchart LR
     Browser[Browser / curl / wpp CLI] -->|HTTPS| Edge[Edge proxy<br/>Tailscale Serve<br/>or host nginx]
-    Edge -->|HTTP + X-Forwarded-*| ContainerNginx[wpp-nginx :3300<br/>bound to 127.0.0.1]
-    ContainerNginx -->|/api/*<br/>/ws| Server[wpp-server<br/>Fastify :3000]
-    ContainerNginx -->|/*| UI[wpp-ui<br/>Vite-built static<br/>:5173]
+    Edge -->|HTTP + X-Forwarded-*| ContainerNginx[wpp-nginx :3900<br/>bound to 127.0.0.1]
+    ContainerNginx -->|/api/*<br/>/ws| Server[wpp-server<br/>Fastify :3901]
+    ContainerNginx -->|/*| UI[wpp-ui<br/>Vite-built static<br/>:5973]
     Server <-->|Baileys| WhatsApp[(WhatsApp<br/>servers)]
     Server --- DB[(SQLite<br/>data/db/wpp.db)]
     Server --- Session[(WA session<br/>data/wa-session/)]
@@ -50,13 +50,13 @@ flowchart LR
 
 | Service     | Stack                                    | Port (internal) |
 |-------------|------------------------------------------|-----------------|
-| `wpp-server`| Node 20, Fastify, Baileys, better-sqlite3| 3000            |
-| `wpp-ui`    | React 18, Vite, Tailwind                 | 5173            |
-| `wpp-nginx` | nginx:alpine                             | 80 → host 3300  |
+| `wpp-server`| Node 20, Fastify, Baileys, better-sqlite3| 3901            |
+| `wpp-ui`    | React 18, Vite, Tailwind                 | 5973            |
+| `wpp-nginx` | nginx:alpine                             | 80 → host 3900  |
 
 TLS is **never** terminated inside the stack. Run a real reverse proxy in
 front (host nginx with Let's Encrypt, Tailscale Serve, Caddy, Cloudflare
-Tunnel, …) and let it talk plain HTTP to `127.0.0.1:3300`. The Fastify
+Tunnel, …) and let it talk plain HTTP to `127.0.0.1:3900`. The Fastify
 server has `trustProxy: true`, so `X-Forwarded-Proto` flips secure cookies
 on automatically when the public URL is HTTPS.
 
@@ -74,12 +74,12 @@ cd whatsapp-personal-proxy
 #   ADMIN_PASS  — anything but "changeme"
 #   JWT_SECRET  — openssl rand -hex 32
 #   PERSONAL_NUMBERS — your own E.164 numbers, comma-separated
-#   PUBLIC_URL  — how you'll reach the UI (http://localhost:3300 is fine to start)
+#   PUBLIC_URL  — how you'll reach the UI (http://localhost:3900 is fine to start)
 
 ./proxy start                       # docker compose up -d --build
 ```
 
-Then open `http://localhost:3300`, log in with `ADMIN_USER`/`ADMIN_PASS`, and
+Then open `http://localhost:3900`, log in with `ADMIN_USER`/`ADMIN_PASS`, and
 scan the QR code with WhatsApp on your phone.
 
 The server **refuses to start** if you leave `ADMIN_PASS=changeme` or the
@@ -97,8 +97,8 @@ On the WPP host, open the console → **API Keys**, create a key for that machin
 and copy the install command shown there. On the other machine:
 
 ```bash
-curl -fsSL http://YOUR-SERVER:3300/api/cli/wpp -o ~/.local/bin/wpp && chmod 755 ~/.local/bin/wpp
-wpp connect http://YOUR-SERVER:3300        # paste the key at the hidden prompt
+curl -fsSL http://YOUR-SERVER:3900/api/cli/wpp -o ~/.local/bin/wpp && chmod 755 ~/.local/bin/wpp
+wpp connect http://YOUR-SERVER:3900        # paste the key at the hidden prompt
 ```
 
 `connect` verifies the key before saving it, and stores it in
@@ -121,13 +121,13 @@ Full reference: [`docs/cli.md`](docs/cli.md).
 
 ## Putting it on the internet (safely-ish)
 
-Pick **one** of these — don't expose `:3300` directly.
+Pick **one** of these — don't expose `:3900` directly.
 
 ### Option A — Tailscale (easiest)
 
 ```bash
 # On the host running WPP:
-tailscale serve --bg --https=443 http://127.0.0.1:3300
+tailscale serve --bg --https=443 http://127.0.0.1:3900
 ```
 
 Tailscale gives you `https://your-host.tail-xxxx.ts.net` with a real cert.
@@ -145,7 +145,7 @@ server {
   ssl_certificate_key /etc/letsencrypt/live/wpp.example.com/privkey.pem;
 
   location / {
-    proxy_pass http://127.0.0.1:3300;
+    proxy_pass http://127.0.0.1:3900;
     proxy_http_version 1.1;
     proxy_set_header Host              $host;
     proxy_set_header X-Real-IP         $remote_addr;

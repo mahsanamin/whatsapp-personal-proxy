@@ -101,7 +101,11 @@ cmd_cli() {
 }
 
 cmd_test() {
-  ( cd server && npm test )
+  if command -v npm >/dev/null 2>&1; then
+    ( cd server && npm test )
+  elif command -v docker >/dev/null 2>&1; then
+    docker run --rm -v "$(pwd):/app" -w /app/server node:20-alpine npm test
+  fi
   if command -v python3 >/dev/null 2>&1; then
     python3 -m unittest discover -s tests/cli -t . -v
   fi
