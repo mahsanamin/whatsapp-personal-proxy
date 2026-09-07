@@ -131,3 +131,18 @@ transports fan it out:
 - `/ws` — WebSocket, with per-chat and per-tab subscriptions. Used by the console.
 - `/api/events` — Server-Sent Events. Used by `wpp watch`, because SSE needs nothing
   beyond Python's standard library.
+
+### Contact-name confidence and repair
+
+Message profile names belong only to incoming authors. Outgoing message names
+must never name a recipient, and outgoing sender addresses must never be paired
+with the recipient address. Names are ranked: manual edits, address-book names,
+chat/legacy names, then incoming profile names. Lower-ranked updates cannot
+replace stronger names. The channel list prefers the phone-number name and
+applies search limits after merging linked addresses.
+
+On connection, legacy names matching an outgoing profile name for that recipient
+are repaired from incoming history. Previous values are kept locally in
+`contact_name_repairs`. If no incoming name is available, the UI falls back to the
+address until contact sync provides one. Messages and allow-list entries are
+preserved. Repair is idempotent and does not infer identity from matching names.

@@ -28,12 +28,14 @@ export default function Whitelist() {
   // know what a JID is.
   useEffect(() => {
     if (!query.trim()) { setResults([]); return }
+    let active = true
+    setResults([])
     const timer = setTimeout(() => {
       api(`/channels?search=${encodeURIComponent(query)}&limit=8`)
-        .then(setResults)
-        .catch(() => setResults([]))
+        .then(rows => { if (active) setResults(rows) })
+        .catch(() => { if (active) setResults([]) })
     }, 250)
-    return () => clearTimeout(timer)
+    return () => { active = false; clearTimeout(timer) }
   }, [query])
 
   const add = async (jid, entryLabel) => {
@@ -54,8 +56,8 @@ export default function Whitelist() {
     load()
   }
 
-  const already = (jid) => entries.some(e => e.jid === jid)
-  const pretty = (jid) => (jid.endsWith('@g.us') ? 'Group' : '+' + jid.split('@')[0])
+  const already = (jid, aliases = []) => entries.some(e => e.jid === jid || aliases.includes(e.jid))
+  const pretty = (jid) => (jid.endsWith('@g.us') ? 'Group' : jid.endsWith('@lid') ? 'Phone number not synced' : '+' + jid.split('@')[0])
 
   return (
     <div className="min-h-screen bg-bg">
@@ -108,10 +110,10 @@ export default function Whitelist() {
                   </div>
                   <button
                     onClick={() => add(c.jid, c.display_name)}
-                    disabled={busy || already(c.jid)}
+                    disabled={busy || already(c.jid, c.alt_jids)}
                     className="text-xs bg-accent hover:bg-emerald-400 disabled:opacity-30 text-black font-medium rounded-lg px-3 py-1.5 transition-all flex-shrink-0"
                   >
-                    {already(c.jid) ? 'Allowed' : 'Allow'}
+                    {already(c.jid, c.alt_jids) ? 'Allowed' : 'Allow'}
                   </button>
                 </div>
               ))}

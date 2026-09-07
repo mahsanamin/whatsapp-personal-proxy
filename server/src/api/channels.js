@@ -3,6 +3,7 @@ import { requireScope } from '../middleware/token.js'
 import { ensureConnected } from '../wa/client.js'
 import { channelType, toJid } from '../util/jid.js'
 import { canonicalJidMap, expandJids } from '../db/lidmap.js'
+import { saveContactName } from '../db/contactNames.js'
 import { loadMessageKey } from '../util/messageRef.js'
 
 export default async function channelRoutes(fastify) {
@@ -74,7 +75,9 @@ export default async function channelRoutes(fastify) {
             )
         )
       )`
-      const like = `%${search}%`
+      const term = search.trim()
+      const normalizedSearch = /^[+\d\s()-]+$/.test(term) ? term.replace(/\D/g, '') : term
+      const like = `%${normalizedSearch}%`
       params.push(like, like, like, like)
     }
 
@@ -83,10 +86,6 @@ export default async function channelRoutes(fastify) {
       cm.display_name, cm.jid`
 
     const cap = limit === undefined ? null : Math.min(Math.max(parseInt(limit, 10) || 0, 1), 1000)
-    if (cap) {
-      sql += ' LIMIT ?'
-      params.push(cap)
-    }
 
     const rows = db.prepare(sql).all(...params)
 
@@ -117,7 +116,7 @@ export default async function channelRoutes(fastify) {
       }
 
       // A name on either address names the person.
-      if (!existing.display_name && row.display_name) existing.display_name = row.display_name
+      if ((row.jid === key || !existing.display_name) && row.display_name) existing.display_name = row.display_name
       existing.unread_count += row.unread_count || 0
       existing.unread_mentions += row.unread_mentions || 0
       if (lastMessage && (!existing.last_message || lastMessage.timestamp > existing.last_message.timestamp)) {
@@ -137,7 +136,7 @@ export default async function channelRoutes(fastify) {
       const bt = b.last_message?.timestamp || ''
       if (at !== bt) return bt.localeCompare(at)
       return (a.display_name || a.jid).localeCompare(b.display_name || b.jid)
-    })
+    }).slice(0, cap || undefined)
   })
 
   // Groups straight from WhatsApp, not from the local mirror. Use this to find
@@ -318,6 +317,7 @@ export default async function channelRoutes(fastify) {
       return reply.code(400).send({ error: 'No valid fields to update', code: 'BAD_INPUT' })
     }
 
+    if (request.body.display_name !== undefined) updates.push('name_rank = 4')
     updates.push('updated_at = CURRENT_TIMESTAMP')
     params.push(jid)
 
@@ -329,6 +329,7 @@ export default async function channelRoutes(fastify) {
       return reply.code(404).send({ error: 'Channel not found', code: 'NOT_FOUND' })
     }
 
+    if (request.body.display_name) saveContactName(db, jid, request.body.display_name, 4)
     const updated = db.prepare('SELECT * FROM channel_meta WHERE jid = ?').get(jid)
     fastify.eventBus.emit('channel.update', updated)
     return updated

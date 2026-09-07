@@ -73,7 +73,7 @@ export function resolveNames(jids) {
   // the @lid one. Resolve through the canonical address first so one person
   // reads with one name everywhere, whichever address a message arrived on.
   const canonical = canonicalJidMap(wanted)
-  const lookups = [...new Set([...wanted, ...canonical.values()])]
+  const lookups = [...new Set(wanted.flatMap(jid => expandJids(jid)))]
   const placeholders = lookups.map(() => '?').join(',')
 
   try {
@@ -88,7 +88,7 @@ export function resolveNames(jids) {
     for (const jid of wanted) {
       // A group is never a sender; own messages fall back to the chat's JID.
       if (jid.endsWith('@g.us')) continue
-      const name = own.get(canonical.get(jid) || jid) || own.get(jid)
+      const name = own.get(canonical.get(jid) || jid) || own.get(jid) || expandJids(jid).map(alias => own.get(alias)).find(Boolean)
       if (name) names.set(jid, name)
     }
   } catch (_) {}
@@ -118,7 +118,7 @@ export function backfillLidMap() {
   const pairs = db.prepare(`
     SELECT DISTINCT lid, pn FROM (
       SELECT json_extract(raw_json, '$.key.remoteJid')      AS lid,
-             json_extract(raw_json, '$.key.senderPn')       AS pn FROM messages
+             json_extract(raw_json, '$.key.senderPn')       AS pn FROM messages WHERE COALESCE(json_extract(raw_json, '$.key.fromMe'), 0) = 0
       UNION
       SELECT json_extract(raw_json, '$.key.senderLid')      AS lid,
              json_extract(raw_json, '$.key.senderPn')       AS pn FROM messages

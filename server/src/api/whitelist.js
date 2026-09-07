@@ -1,4 +1,5 @@
 import { nanoid } from 'nanoid'
+import { toJid } from '../util/jid.js'
 import { db } from '../db/index.js'
 import { requireScope } from '../middleware/token.js'
 
@@ -18,10 +19,10 @@ export default async function whitelistRoutes(fastify) {
       return reply.code(400).send({ error: 'JID required', code: 'BAD_INPUT' })
     }
 
-    // Accept +971..., a phone-number JID, or a group JID (…@g.us).
-    const normalizedJid = jid.includes('@')
-      ? jid.trim()
-      : jid.trim().replace(/^\+/, '') + '@s.whatsapp.net'
+    const normalizedJid = toJid(jid)
+    if (!normalizedJid || !/^(?:\d+@(s\.whatsapp\.net|lid)|[\d-]+@g\.us)$/.test(normalizedJid)) {
+      return reply.code(400).send({ error: 'A valid phone number or chat address is required', code: 'BAD_INPUT' })
+    }
 
     const id = nanoid()
 

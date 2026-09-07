@@ -12,6 +12,8 @@ import path from 'node:path'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { canonicalJid, resolveNames } from '../db/lidmap.js'
+import { saveContactName, repairContactNames } from '../db/contactNames.js'
+import { incomingContact } from '../util/contactIdentity.js'
 
 const MAX_RETRIES = 10
 let retries = 0
@@ -126,8 +128,10 @@ export async function createWAClient(sessionPath, eventBus) {
       // were read correctly.
       try {
         const { backfillLidMap } = await import('../db/lidmap.js')
+        const contacts = repairContactNames(db)
         const repaired = backfillLidMap()
-        if (repaired.mappings || repaired.names) {
+        repaired.contacts = contacts
+        if (repaired.mappings || repaired.names || repaired.contacts) {
           logger.info({ repaired }, 'backfilled LID/phone-number mappings')
         }
       } catch (_) {}
@@ -211,14 +215,10 @@ export async function createWAClient(sessionPath, eventBus) {
       INSERT INTO channel_meta (jid, display_name) VALUES (?, ?)
       ON CONFLICT(jid) DO UPDATE SET display_name = COALESCE(excluded.display_name, channel_meta.display_name)
     `),
-    updateName: db.prepare(`UPDATE channel_meta SET display_name = ? WHERE jid = ? AND display_name IS NULL`),
     upsertLidMap: db.prepare(`
       INSERT INTO lid_map (lid, pn) VALUES (?, ?)
       ON CONFLICT(lid) DO UPDATE SET pn = excluded.pn, updated_at = datetime('now')
     `),
-    getLidByPn: db.prepare(`SELECT lid FROM lid_map WHERE pn = ?`),
-    getPnByLid: db.prepare(`SELECT pn FROM lid_map WHERE lid = ?`),
-    getNameByJid: db.prepare(`SELECT display_name FROM channel_meta WHERE jid = ?`),
   }
 
   // Store a LID-to-PN mapping and propagate any known name
@@ -226,42 +226,23 @@ export async function createWAClient(sessionPath, eventBus) {
     if (!lid?.endsWith('@lid') || !pn?.endsWith('@s.whatsapp.net')) return
     try {
       stmts.upsertLidMap.run(lid, pn)
-      // If the PN has a name, copy it to the LID channel
-      const pnRow = stmts.getNameByJid.get(pn)
-      if (pnRow?.display_name) {
-        stmts.updateName.run(pnRow.display_name, lid)
-      }
-      // If the LID has a name but PN doesn't, copy the other way
-      const lidRow = stmts.getNameByJid.get(lid)
-      if (lidRow?.display_name && !pnRow?.display_name) {
-        stmts.updateName.run(lidRow.display_name, pn)
-      }
+      const rows = db.prepare('SELECT jid, display_name, name_rank FROM channel_meta WHERE jid IN (?, ?) AND display_name IS NOT NULL ORDER BY name_rank DESC, CASE WHEN jid = ? THEN 0 ELSE 1 END').all(pn, lid, pn)
+      if (rows[0]) saveContactName(db, rows[0].jid, rows[0].display_name, rows[0].name_rank)
     } catch (_) {}
   }
 
   // Upsert a contact name, also propagating via LID map
-  function upsertContact(id, name) {
-    if (!id || !name) return
-    try {
-      stmts.upsertChannel.run(id, name)
-      // Propagate name to the other JID format via lid_map
-      if (id.endsWith('@lid')) {
-        const mapping = stmts.getPnByLid.get(id)
-        if (mapping?.pn) stmts.updateName.run(name, mapping.pn)
-      } else if (id.endsWith('@s.whatsapp.net')) {
-        const mapping = stmts.getLidByPn.get(id)
-        if (mapping?.lid) stmts.updateName.run(name, mapping.lid)
-      }
-    } catch (_) {}
+  function upsertContact(id, name, rank = 1) {
+    saveContactName(db, id, name, rank)
   }
 
   // Process a contact object from Baileys (contacts.upsert / messaging-history.set)
   function processContact(contact) {
     // Address book name takes priority over pushName
     const name = contact.name || contact.notify || contact.verifiedName
-    if (name && contact.id) upsertContact(contact.id, name)
-    if (name && contact.lid) upsertContact(contact.lid, name)
-    if (name && contact.phoneNumber) upsertContact(contact.phoneNumber, name)
+    if (name && contact.id) upsertContact(contact.id, name, contact.name ? 3 : 1)
+    if (name && contact.lid) upsertContact(contact.lid, name, contact.name ? 3 : 1)
+    if (name && contact.phoneNumber) upsertContact(contact.phoneNumber, name, contact.name ? 3 : 1)
     // Store LID-PN mapping
     if (contact.lid && contact.id?.endsWith('@s.whatsapp.net')) {
       storeLidMapping(contact.lid, contact.id)
@@ -287,9 +268,9 @@ export async function createWAClient(sessionPath, eventBus) {
     if (!key) return
 
     // Direct chat filed under the LID; the key names the phone number.
-    storeLidMapping(key.remoteJid, key.senderPn)
+    if (!key.fromMe) storeLidMapping(key.remoteJid, key.senderPn)
     // Direct chat filed under the phone number; the key names the LID.
-    storeLidMapping(key.senderLid, key.remoteJid)
+    if (!key.fromMe) storeLidMapping(key.senderLid, key.remoteJid)
     storeLidMapping(key.senderLid, key.senderPn)
 
     // Inside a group the sender is the participant, addressed either way.
@@ -302,7 +283,8 @@ export async function createWAClient(sessionPath, eventBus) {
   sock.ev.on('chats.upsert', (chats) => {
     for (const chat of chats) {
       try {
-        stmts.upsertChannel.run(chat.id, chat.name || null)
+        stmts.upsertChannel.run(chat.id, null)
+        if (chat.name) upsertContact(chat.id, chat.name, 2)
         // Extract LID-PN from chat object
         if (chat.lidJid && chat.pnJid) storeLidMapping(chat.lidJid, chat.pnJid)
         if (chat.id?.endsWith('@lid') && chat.pnJid) storeLidMapping(chat.id, chat.pnJid)
@@ -313,7 +295,8 @@ export async function createWAClient(sessionPath, eventBus) {
   sock.ev.on('chats.update', (updates) => {
     for (const chat of updates) {
       try {
-        if (chat.id) stmts.upsertChannel.run(chat.id, chat.name || null)
+        if (chat.id) stmts.upsertChannel.run(chat.id, null)
+        if (chat.name) upsertContact(chat.id, chat.name, 2)
         if (chat.lidJid && chat.pnJid) storeLidMapping(chat.lidJid, chat.pnJid)
       } catch (_) {}
     }
@@ -344,7 +327,8 @@ export async function createWAClient(sessionPath, eventBus) {
 
     for (const chat of (chats || [])) {
       try {
-        stmts.upsertChannel.run(chat.id, chat.name || null)
+        stmts.upsertChannel.run(chat.id, null)
+        if (chat.name) upsertContact(chat.id, chat.name, 2)
         if (chat.lidJid && chat.pnJid) storeLidMapping(chat.lidJid, chat.pnJid)
         if (chat.id?.endsWith('@lid') && chat.pnJid) storeLidMapping(chat.id, chat.pnJid)
       } catch (_) {}
@@ -355,13 +339,8 @@ export async function createWAClient(sessionPath, eventBus) {
     for (const msg of (msgs || [])) {
       try {
         extractMappingFromMessage(msg)
-        if (msg.pushName && msg.key?.remoteJid) {
-          const contactJid = msg.key.participant || msg.key.remoteJid
-          upsertContact(contactJid, msg.pushName)
-          if (!msg.key.remoteJid.endsWith('@g.us')) {
-            upsertContact(msg.key.remoteJid, msg.pushName)
-          }
-        }
+        const contact = incomingContact(msg)
+        if (contact) upsertContact(contact.jid, contact.name)
         const normalized = normalizeMessage(msg)
         if (!normalized) continue
         saveMessage(normalized)
@@ -378,13 +357,8 @@ export async function createWAClient(sessionPath, eventBus) {
         extractMappingFromMessage(msg)
 
         // Extract pushName to resolve contact names
-        if (msg.pushName && msg.key?.remoteJid) {
-          const contactJid = msg.key.participant || msg.key.remoteJid
-          upsertContact(contactJid, msg.pushName)
-          if (!msg.key.remoteJid.endsWith('@g.us')) {
-            upsertContact(msg.key.remoteJid, msg.pushName)
-          }
-        }
+        const contact = incomingContact(msg)
+        if (contact) upsertContact(contact.jid, contact.name)
 
         const normalized = normalizeMessage(msg)
         if (!normalized) continue

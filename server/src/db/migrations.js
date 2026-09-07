@@ -92,6 +92,7 @@ export function runMigrations(db) {
   // anything newer than last_read_at is unread. Without this, unread_count is
   // simply every message the contact has ever sent.
   addColumn(db, 'channel_meta', 'last_read_at', 'DATETIME')
+  addColumn(db, 'channel_meta', 'name_rank', 'INTEGER NOT NULL DEFAULT 0')
 
   // Whether a message @-mentions the owner. Computed at ingest from the
   // message's contextInfo, because parsing raw_json per query is far too slow
