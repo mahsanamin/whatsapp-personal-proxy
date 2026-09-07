@@ -4,19 +4,6 @@ import { readFileSync } from 'node:fs'
 
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8')
 
-test('unread is measured against last_read_at, not message status', () => {
-  const src = read('../src/api/channels.js')
-  assert.ok(
-    src.includes('cm.last_read_at IS NULL OR m.timestamp > cm.last_read_at'),
-    'unread counted from message status again — incoming messages are always ' +
-    "'sent', so that reports every message ever received as unread",
-  )
-  assert.ok(
-    !src.includes("m.status != 'read'"),
-    "status is a delivery receipt for outgoing messages; it cannot express whether the owner has read an incoming one",
-  )
-})
-
 test('a chat can be marked read across both of its addresses', () => {
   const src = read('../src/api/channels.js')
   assert.ok(src.includes("'/channels/:jid/read'"), 'the mark-read route is gone')

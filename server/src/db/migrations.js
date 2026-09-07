@@ -76,6 +76,28 @@ export function runMigrations(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_lid_map_pn ON lid_map(pn);
 
+    -- Unread snapshots/deltas are independent of how much history is mirrored.
+    CREATE TABLE IF NOT EXISTS conversation_unread (
+      revision INTEGER PRIMARY KEY AUTOINCREMENT,
+      jid TEXT NOT NULL UNIQUE,
+      unread_count INTEGER NOT NULL DEFAULT 0,
+      known INTEGER NOT NULL DEFAULT 0,
+      marked_unread INTEGER NOT NULL DEFAULT 0,
+      source TEXT NOT NULL,
+      as_of INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS unread_counter_events (
+      message_id TEXT PRIMARY KEY
+    );
+    CREATE TABLE IF NOT EXISTS unread_messages (
+      message_id TEXT PRIMARY KEY,
+      jid TEXT NOT NULL,
+      timestamp TEXT NOT NULL,
+      mentions_me INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_unread_messages_jid_ts ON unread_messages(jid, timestamp);
+
+
     -- Web console sessions. Kept in SQLite rather than in memory so a server
     -- restart (a redeploy, a crash, a config change) does not sign the owner
     -- out of the console.
@@ -87,11 +109,10 @@ export function runMigrations(db) {
     CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
   `)
 
-  // Read state. Incoming messages are stored with status 'sent' and WhatsApp
-  // never tells us the owner read them, so "unread" has to be tracked here:
-  // anything newer than last_read_at is unread. Without this, unread_count is
-  // simply every message the contact has ever sent.
+  // Keep the read cursor separately from outgoing delivery receipts.
+  // Counts come from conversation_unread, not the size of the message archive.
   addColumn(db, 'channel_meta', 'last_read_at', 'DATETIME')
+  addColumn(db, 'unread_messages', 'is_read', 'INTEGER NOT NULL DEFAULT 0')
   addColumn(db, 'channel_meta', 'name_rank', 'INTEGER NOT NULL DEFAULT 0')
 
   // Whether a message @-mentions the owner. Computed at ingest from the

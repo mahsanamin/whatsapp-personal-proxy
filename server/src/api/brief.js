@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import { requireScope } from '../middleware/token.js'
-import { canonicalJidMap, resolveNames } from '../db/lidmap.js'
+import { canonicalJidMap, resolveNames, expandJids } from '../db/lidmap.js'
+import { unreadState } from '../db/unread.js'
 import { channelType } from '../util/jid.js'
 
 /**
@@ -16,11 +17,12 @@ import { channelType } from '../util/jid.js'
 // group chatter, and anything muted sinks regardless of volume.
 function score(chat) {
   if (chat.is_muted) return 0
-  let value = chat.unread_count > 0 ? 1 : 0
+  const count = chat.unread_count ?? chat.unread_lower_bound
+  let value = count > 0 || chat.marked_unread ? 1 : 0
   if (chat.unread_mentions > 0) value += 100
   if (chat.replies_to_me > 0) value += 50
   if (chat.type === 'dm') value += 20
-  value += Math.min(chat.unread_count, 10)
+  value += Math.min(count, 10)
   return value
 }
 
@@ -52,23 +54,19 @@ export default async function briefRoutes(fastify) {
             AND (cm.last_read_at IS NULL OR m.timestamp > cm.last_read_at)
             AND (? IS NULL OR m.timestamp > ?)) AS unread_count,
         (SELECT COUNT(*) FROM messages m
+          JOIN unread_messages u ON u.message_id = m.id AND u.is_read = 0
           WHERE m.jid = cm.jid AND m.is_from_me = 0 AND m.mentions_me = 1
             AND (cm.last_read_at IS NULL OR m.timestamp > cm.last_read_at)
             AND (? IS NULL OR m.timestamp > ?)) AS unread_mentions,
         (SELECT COUNT(*) FROM messages m
+          JOIN unread_messages u ON u.message_id = m.id AND u.is_read = 0
           JOIN messages q ON q.id = m.quoted_id
           WHERE m.jid = cm.jid AND m.is_from_me = 0 AND q.is_from_me = 1
             AND (cm.last_read_at IS NULL OR m.timestamp > cm.last_read_at)
             AND (? IS NULL OR m.timestamp > ?)) AS replies_to_me,
         (SELECT MAX(m.timestamp) FROM messages m WHERE m.jid = cm.jid) AS last_activity
       FROM channel_meta cm
-      WHERE EXISTS (
-        SELECT 1 FROM messages m
-        WHERE m.jid = cm.jid AND m.is_from_me = 0 AND m.type NOT IN ('reaction', 'unknown')
-          AND (cm.last_read_at IS NULL OR m.timestamp > cm.last_read_at)
-          AND (? IS NULL OR m.timestamp > ?)
-      )
-    `).all(since, since, since, since, since, since, since, since)
+    `).all(since, since, since, since, since, since)
 
     // Collapse a contact's two addresses, exactly as the chat list does.
     const canonical = canonicalJidMap(rows.map(r => r.jid))
@@ -99,21 +97,34 @@ export default async function briefRoutes(fastify) {
       existing.jids.push(row.jid)
     }
 
-    let chats = [...merged.values()]
+    let chats = [...merged.values()].map(chat => {
+      const state = unreadState(db, expandJids(chat.jid))
+      const available = state.unread_count ?? state.unread_lower_bound
+      const count = since ? Math.min(available, chat.unread_count) : available
+      return { ...chat, ...state,
+        unread_count: state.unread_known ? count : null,
+        unread_lower_bound: count,
+        unread_mentions: Math.min(chat.unread_mentions, count),
+        replies_to_me: Math.min(chat.replies_to_me, count),
+      }
+    })
+      .filter(c => (c.unread_count ?? c.unread_lower_bound) > 0 || c.marked_unread)
       .filter(c => includeMuted || !c.is_muted)
       .filter(c => includeGroups || c.type === 'dm')
       .sort((a, b) => score(b) - score(a) || (b.last_activity || '').localeCompare(a.last_activity || ''))
 
     const total = {
       chats: chats.length,
-      messages: chats.reduce((n, c) => n + c.unread_count, 0),
+      messages: chats.reduce((n, c) => n + (c.unread_count ?? c.unread_lower_bound), 0),
+      counts_complete: chats.every(c => c.unread_known),
       mentions: chats.reduce((n, c) => n + c.unread_mentions, 0),
       replies: chats.reduce((n, c) => n + c.replies_to_me, 0),
     }
 
     chats = chats.slice(0, limit)
 
-    // The actual unread messages, newest-last so each chat reads as a transcript.
+    // Recent mirrored content for unread chats. WhatsApp can report more unread
+    // messages than the local mirror holds; never invent the missing content.
     const recent = db.prepare(`
       SELECT id, jid, from_jid, body, type, timestamp, mentions_me, quoted_id
       FROM messages
@@ -128,11 +139,11 @@ export default async function briefRoutes(fastify) {
       const lastRead = rows.find(r => chat.jids.includes(r.jid))?.last_read_at || null
       const messages = []
       for (const jid of chat.jids) {
-        messages.push(...recent.all(jid, lastRead, lastRead, since, since, perChat))
+        messages.push(...recent.all(jid, lastRead, lastRead, since, since, Math.min(perChat, Math.max(chat.unread_count ?? chat.unread_lower_bound, 1))))
       }
       chat.messages = messages
         .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
-        .slice(-perChat)
+        .slice(-Math.min(perChat, Math.max(chat.unread_count ?? chat.unread_lower_bound, 1)))
       senderJids.push(...chat.messages.map(m => m.from_jid))
       delete chat.jids
     }

@@ -52,10 +52,10 @@ class TestPhoneParsing(CliTestCase):
 
 class TestUrlNormalisation(CliTestCase):
     def test_strips_trailing_slash(self):
-        self.assertEqual(self.cli.normalize_url("http://10.0.0.5:3300/"), "http://10.0.0.5:3300")
+        self.assertEqual(self.cli.normalize_url("http://example.com:3300/"), "http://example.com:3300")
 
     def test_rejects_bad_urls(self):
-        for value in ("10.0.0.5:3300", "ftp://host", "http://host/path", "http://host?q=1", ""):
+        for value in ("example.com:3300", "ftp://host", "http://host/path", "http://host?q=1", ""):
             with self.assertRaises(self.cli.WppError, msg=repr(value)):
                 self.cli.normalize_url(value)
 
@@ -246,6 +246,24 @@ class TestErrorEnvelope(CliTestCase):
         self.assertFalse(payload["success"])
         self.assertEqual(payload["error"]["code"], "SOME_CODE")
         self.assertEqual(payload["error"]["status"], 503)
+
+
+
+
+
+class TestUnreadState(CliTestCase):
+    def test_unknown_counts_are_not_reported_as_zero(self):
+        result = self.cli.compact_chat({"jid": "15555550101@s.whatsapp.net", "unread_known": False, "unread_count": None, "unread_lower_bound": 2})
+        self.assertIsNone(result["unread"])
+        self.assertFalse(result["unread_known"])
+        self.assertEqual(result["unread_at_least"], 2)
+
+    def test_known_counts_and_marked_unread_survive_compacting(self):
+        result = self.cli.compact_chat({"unread_known": True, "unread_count": 4})
+        self.assertEqual(result["unread"], 4)
+        result = self.cli.compact_chat({"unread_known": True, "unread_count": 0, "marked_unread": True})
+        self.assertNotIn("unread", result)
+        self.assertTrue(result["marked_unread"])
 
 
 if __name__ == "__main__":

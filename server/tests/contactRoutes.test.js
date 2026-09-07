@@ -7,6 +7,7 @@ Object.assign(process.env, {
 const { db } = await import('../src/db/index.js')
 const { default: channels } = await import('../src/api/channels.js')
 const { default: whitelist } = await import('../src/api/whitelist.js')
+const { applyUnreadUpdate } = await import('../src/db/unread.js')
 const { backfillLidMap } = await import('../src/db/lidmap.js')
 const routes = new Map()
 const app = { requireSession() {}, get(path, options, handler) { routes.set('GET ' + path, handler) }, post(path, options, handler) { routes.set('POST ' + path, handler) }, patch() {}, delete() {} }
@@ -21,6 +22,7 @@ test('limited search merges aliases completely and consistently prefers the phon
   db.prepare('INSERT INTO channel_meta (jid, display_name) VALUES (?, ?)').run(pn, 'Saved Friend')
   db.prepare('INSERT INTO channel_meta (jid, display_name) VALUES (?, ?)').run(lid, 'Owner')
   for (const [id, jid] of [['1', pn], ['2', lid]]) db.prepare('INSERT INTO messages (id, jid, timestamp, body) VALUES (?, ?, ?, ?)').run(id, jid, id, 'test')
+  applyUnreadUpdate(db, [pn, lid], { unreadCount: 2 }, 'history')
   for (const search of ['Saved Friend', '+1 (555) 555-0101']) {
     const result = await routes.get('GET /channels')({ query: { search, limit: '1' } })
     assert.equal(result.length, 1)

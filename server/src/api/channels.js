@@ -3,6 +3,7 @@ import { requireScope } from '../middleware/token.js'
 import { ensureConnected } from '../wa/client.js'
 import { channelType, toJid } from '../util/jid.js'
 import { canonicalJid, canonicalJidMap, expandJids, resolveNames } from '../db/lidmap.js'
+import { unreadState, unreadMentions, markUnreadThrough } from '../db/unread.js'
 import { saveContactName } from '../db/contactNames.js'
 import { loadMessageKey } from '../util/messageRef.js'
 
@@ -21,12 +22,6 @@ export default async function channelRoutes(fastify) {
         cm.is_archived,
         cm.priority,
         cm.notes,
-        (SELECT COUNT(*) FROM messages m
-          WHERE m.jid = cm.jid AND m.is_from_me = 0
-            AND (cm.last_read_at IS NULL OR m.timestamp > cm.last_read_at)) AS unread_count,
-        (SELECT COUNT(*) FROM messages m
-          WHERE m.jid = cm.jid AND m.is_from_me = 0 AND m.mentions_me = 1
-            AND (cm.last_read_at IS NULL OR m.timestamp > cm.last_read_at)) AS unread_mentions,
         (SELECT json_object(
           'body', m2.body,
           'timestamp', m2.timestamp,
@@ -108,8 +103,6 @@ export default async function channelRoutes(fastify) {
           type: channelType(key),
           display_name: row.display_name,
           last_message: lastMessage,
-          unread_count: row.unread_count || 0,
-          unread_mentions: row.unread_mentions || 0,
           alt_jids: row.jid === key ? [] : [row.jid],
         })
         continue
@@ -117,8 +110,6 @@ export default async function channelRoutes(fastify) {
 
       // A name on either address names the person.
       if ((row.jid === key || !existing.display_name) && row.display_name) existing.display_name = row.display_name
-      existing.unread_count += row.unread_count || 0
-      existing.unread_mentions += row.unread_mentions || 0
       if (lastMessage && (!existing.last_message || lastMessage.timestamp > existing.last_message.timestamp)) {
         existing.last_message = lastMessage
       }
@@ -136,7 +127,10 @@ export default async function channelRoutes(fastify) {
       const bt = b.last_message?.timestamp || ''
       if (at !== bt) return bt.localeCompare(at)
       return (a.display_name || a.jid).localeCompare(b.display_name || b.jid)
-    }).slice(0, cap || undefined)
+    }).slice(0, cap || undefined).map(channel => {
+      const jids = expandJids(channel.jid)
+      return { ...channel, ...unreadState(db, jids), unread_mentions: unreadMentions(db, jids) }
+    })
   })
 
   // Groups straight from WhatsApp, not from the local mirror. Use this to find
@@ -206,8 +200,8 @@ export default async function channelRoutes(fastify) {
     }
   })
 
-  // Mark a conversation read. WhatsApp does not tell us when the owner reads
-  // something, so this is the only thing that makes "unread" mean anything.
+  // A console read complements the read updates received from WhatsApp.
+  // It acknowledges only the rendered page and never sends a read receipt.
   fastify.post('/channels/:jid/read', {
     preHandler: requireScope('channels:read'),
   }, async (request, reply) => {
@@ -223,6 +217,7 @@ export default async function channelRoutes(fastify) {
       INSERT INTO channel_meta (jid, last_read_at) VALUES (?, ?)
       ON CONFLICT(jid) DO UPDATE SET last_read_at = excluded.last_read_at
     `)
+    let remaining = 0
     const apply = db.transaction(() => {
       // A delayed request from another tab must not move the read cursor back.
       const previous = db.prepare('SELECT last_read_at FROM channel_meta WHERE jid = ?')
@@ -232,15 +227,14 @@ export default async function channelRoutes(fastify) {
         if (Number.isFinite(time) && time > Date.parse(upTo)) upTo = new Date(time).toISOString()
       }
       for (const jid of jids) stmt.run(jid, upTo)
+      remaining = markUnreadThrough(db, jids, upTo)
     })
     apply()
 
-    const remaining = db.prepare(
-      `SELECT COUNT(*) AS c FROM messages
-       WHERE jid IN (${jids.map(() => '?').join(',')}) AND is_from_me = 0 AND timestamp > ?`
-    ).get(...jids, upTo).c
+    const state = { ...unreadState(db, jids), unread_mentions: unreadMentions(db, jids) }
+    fastify.eventBus?.emit('channel.update', { jid: canonicalJid(requested), ...state })
+    return { ok: true, jid: requested, read_up_to: upTo, ...state, unread_count: remaining }
 
-    return { ok: true, jid: requested, read_up_to: upTo, unread_count: remaining }
   })
 
   // Ask the phone for history older than anything we hold.

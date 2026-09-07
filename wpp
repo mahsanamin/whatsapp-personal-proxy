@@ -285,8 +285,15 @@ def compact_chat(c):
         "name": c.get("display_name") or (c.get("jid") or "").split("@")[0],
         "type": c.get("type"),
     }
-    if c.get("unread_count"):
+    if c.get("unread_known") is False:
+        out["unread"] = None
+        out["unread_known"] = False
+        if c.get("unread_lower_bound"):
+            out["unread_at_least"] = c["unread_lower_bound"]
+    elif c.get("unread_count"):
         out["unread"] = c["unread_count"]
+    if c.get("marked_unread"):
+        out["marked_unread"] = True
     if c.get("unread_mentions"):
         out["mentions_you"] = c["unread_mentions"]
     last = c.get("last_message")

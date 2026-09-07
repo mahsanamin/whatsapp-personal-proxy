@@ -9,6 +9,8 @@ Object.assign(process.env, {
 })
 const { db } = await import('../src/db/index.js')
 const { default: channels } = await import('../src/api/channels.js')
+const { default: brief } = await import('../src/api/brief.js')
+const { applyUnreadUpdate } = await import('../src/db/unread.js')
 const { default: tabs } = await import('../src/api/tabs.js')
 const { default: whitelist } = await import('../src/api/whitelist.js')
 const { expandJids } = await import('../src/db/lidmap.js')
@@ -24,6 +26,7 @@ app.addHook('onRequest', async request => {
 await app.register(channels)
 await app.register(whitelist)
 await app.register(tabs)
+await app.register(brief)
 const consoleHeaders = { 'x-test-console': 'yes' }
 const pn = '15555550101@s.whatsapp.net'
 const lid = '15555550201@lid'
@@ -32,7 +35,7 @@ const unrelated = '15555550301@s.whatsapp.net'
 const url = jid => '/channels/' + encodeURIComponent(jid)
 
 beforeEach(() => {
-  for (const table of ['messages', 'channel_meta', 'lid_map', 'whitelist', 'tabs', 'tokens']) db.prepare(`DELETE FROM ${table}`).run()
+  for (const table of ['unread_counter_events', 'conversation_unread', 'unread_messages', 'messages', 'channel_meta', 'lid_map', 'whitelist', 'tabs', 'tokens']) db.prepare(`DELETE FROM ${table}`).run()
   for (const alias of [lid, sibling]) db.prepare('INSERT INTO lid_map (lid, pn) VALUES (?, ?)').run(alias, pn)
   db.prepare('INSERT INTO channel_meta (jid, display_name) VALUES (?, ?)').run(lid, 'Friend')
 })
@@ -124,4 +127,15 @@ test('invalid allow-list labels return a client error', async () => {
   const response = await app.inject({ method: 'POST', url: '/whitelist', headers: consoleHeaders, payload: { jid: pn, label: {} } })
   assert.equal(response.statusCode, 400)
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM whitelist').get().n, 0)
+})
+
+test('sidebar and brief do not turn unsynced history into unread counts', async () => {
+  db.prepare('INSERT INTO messages (id, jid, timestamp, body) VALUES (?, ?, ?, ?)').run('archive', lid, '2020-01-01T00:00:00.000Z', 'Old history')
+  const channels = await app.inject({ url: '/channels', headers: consoleHeaders })
+  assert.equal(channels.json()[0].unread_count, null)
+  const unknown = await app.inject({ url: '/brief', headers: consoleHeaders })
+  assert.equal(unknown.json().chats.length, 0)
+  applyUnreadUpdate(db, [pn, lid], { unreadCount: 3 }, 'history')
+  const known = await app.inject({ url: '/brief', headers: consoleHeaders })
+  assert.equal(known.json().chats[0].unread_count, 3)
 })

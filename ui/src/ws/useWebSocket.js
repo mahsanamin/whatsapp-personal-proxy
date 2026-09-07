@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 
-export function useWebSocket({ onMessage, onStatus }) {
+export function useWebSocket({ onMessage, onStatus, onChannelUpdate }) {
   const wsRef = useRef(null)
   const [connected, setConnected] = useState(false)
 
@@ -8,8 +8,8 @@ export function useWebSocket({ onMessage, onStatus }) {
   // the state of the first render forever — which is why an incoming message
   // never landed in the open conversation while the chat list still updated.
   // Route through a ref so the live socket always calls the current handlers.
-  const handlers = useRef({ onMessage, onStatus })
-  handlers.current = { onMessage, onStatus }
+  const handlers = useRef({ onMessage, onStatus, onChannelUpdate })
+  handlers.current = { onMessage, onStatus, onChannelUpdate }
 
   useEffect(() => {
     let disposed = false
@@ -42,6 +42,7 @@ export function useWebSocket({ onMessage, onStatus }) {
         try {
           const msg = JSON.parse(evt.data)
           if (msg.event === 'message.new') handlers.current.onMessage?.(msg.data)
+          if (msg.event === 'channel.update') handlers.current.onChannelUpdate?.(msg.data)
           if (msg.event === 'wa.status') handlers.current.onStatus?.(msg.data)
         } catch (e) {
           // Ignore malformed frames

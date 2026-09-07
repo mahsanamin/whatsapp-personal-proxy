@@ -95,7 +95,7 @@ Chats often arrive under the LID while contact names arrive under the PN — so 
 cross-referencing them, chats show up nameless and half a DM goes missing.
 
 The `lid_map` table holds the correspondence, populated from contact events, chat
-objects, `lid-mapping.update`, and message keys (`remoteJidAlt` / `participantAlt`).
+objects, `lid-mapping.update`, and message keys (`senderPn` / `senderLid` and participant counterparts).
 Two things depend on it:
 
 - **Names** propagate in both directions when a mapping is learned (`wa/client.js`).
@@ -162,3 +162,31 @@ phone-number address when known, and attempts to allow another address of an
 already allowed contact return `DUPLICATE`. Existing LID entries remain effective.
 Names and coincidentally equal numeric IDs never grant send permission; token
 scope requirements still apply independently.
+
+### Unread state
+
+Unread counts do not come from the size of the message archive or delivery status.
+`conversation_unread` stores WhatsApp snapshots and subsequent live deltas.
+History counters are absolute; positive live counters increment them. An explicit
+read update clears the count, and a mark-unread action is a flag rather than a
+negative number. A newer snapshot can reconcile offline activity; stale history
+cannot undo a more recent read.
+
+Older installations did not preserve this state. Until a usable snapshot or read
+event arrives, `unread_count` is null and `unread_known` is false. New activity can
+supply an `unread_lower_bound`; the console shows a dot instead of inventing an
+exact number. The CLI preserves that uncertainty in compact output, and the brief
+reports whether its counts are complete. Unknown history is never counted as unread.
+
+The console acknowledges a chat only after loading its messages while the page is
+visible and focused. Failed requests, stale responses after switching chats, and
+hidden tabs do not acknowledge anything. Reads apply across mapped addresses and
+preserve tracked arrivals newer than the rendered page. These acknowledgements
+are local to WPP; they do not send WhatsApp read receipts. WhatsApp read updates
+are applied when received from the linked device.
+
+Browser regression tests use synthetic API and WebSocket fixtures, with no live
+account access. Install the UI dev dependencies and run `npm run test:browser`
+from `ui/` with `BROWSER_EXECUTABLE` pointing to Chromium (default:
+`/usr/bin/chromium-browser`). Tests start their own local Vite server and cover
+visible/hidden reads, live arrivals, failed loads and rapid chat switching.

@@ -11,8 +11,9 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
-import { canonicalJid, resolveNames } from '../db/lidmap.js'
+import { canonicalJid, resolveNames, expandJids } from '../db/lidmap.js'
 import { saveContactName, repairContactNames } from '../db/contactNames.js'
+import { applyUnreadUpdate, unreadState, recordUnreadMessage, applyUnreadReceipt } from '../db/unread.js'
 import { incomingContact } from '../util/contactIdentity.js'
 
 const MAX_RETRIES = 10
@@ -279,6 +280,14 @@ export async function createWAClient(sessionPath, eventBus) {
     storeLidMapping(key.participantLid, key.participantPn)
   }
 
+  function syncUnread(chat, source = 'live') {
+    if (!chat.id) return
+    const jids = expandJids(chat.id)
+    if (applyUnreadUpdate(db, jids, chat, source)) {
+      eventBus.emit('channel.update', { jid: canonicalJid(chat.id), ...unreadState(db, jids) })
+    }
+  }
+
   // ─── Chat sync events ─────────────────────────────────────────────
   sock.ev.on('chats.upsert', (chats) => {
     for (const chat of chats) {
@@ -288,6 +297,7 @@ export async function createWAClient(sessionPath, eventBus) {
         // Extract LID-PN from chat object
         if (chat.lidJid && chat.pnJid) storeLidMapping(chat.lidJid, chat.pnJid)
         if (chat.id?.endsWith('@lid') && chat.pnJid) storeLidMapping(chat.id, chat.pnJid)
+        syncUnread(chat)
       } catch (_) {}
     }
   })
@@ -298,6 +308,7 @@ export async function createWAClient(sessionPath, eventBus) {
         if (chat.id) stmts.upsertChannel.run(chat.id, null)
         if (chat.name) upsertContact(chat.id, chat.name, 2)
         if (chat.lidJid && chat.pnJid) storeLidMapping(chat.lidJid, chat.pnJid)
+        syncUnread(chat)
       } catch (_) {}
     }
   })
@@ -331,6 +342,7 @@ export async function createWAClient(sessionPath, eventBus) {
         if (chat.name) upsertContact(chat.id, chat.name, 2)
         if (chat.lidJid && chat.pnJid) storeLidMapping(chat.lidJid, chat.pnJid)
         if (chat.id?.endsWith('@lid') && chat.pnJid) storeLidMapping(chat.id, chat.pnJid)
+        syncUnread(chat, 'history')
       } catch (_) {}
     }
 
@@ -363,6 +375,7 @@ export async function createWAClient(sessionPath, eventBus) {
         const normalized = normalizeMessage(msg)
         if (!normalized) continue
         saveMessage(normalized)
+        recordUnreadMessage(db, normalized)
         archiveMedia(normalized)
         // Broadcast the address the chat is filed under as well as the one the
         // message arrived on, so a subscriber can tell they are the same
@@ -382,6 +395,12 @@ export async function createWAClient(sessionPath, eventBus) {
     for (const update of updates) {
       try {
         updateMessageStatus(update)
+        if ([4, 5].includes(update.update?.status) && update.key?.remoteJid && update.key?.id) {
+          const jids = expandJids(update.key.remoteJid)
+          if (applyUnreadReceipt(db, jids, update.key.id)) {
+            eventBus.emit('channel.update', { jid: canonicalJid(update.key.remoteJid), ...unreadState(db, jids) })
+          }
+        }
         eventBus.emit('message.update', update)
       } catch (err) {
         // Non-fatal

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { api } from '../api/client'
+import { useConversationRead } from '../hooks/useConversationRead'
 import { useWebSocket } from '../ws/useWebSocket'
 
 function formatJid(jid) {
@@ -49,6 +50,7 @@ function ChannelRow({ channel, active, onClick, onDragStart }) {
   return (
     <div
       draggable
+      title={channel.unread_known === false ? 'Unread count has not been synced for this chat' : undefined}
       onDragStart={onDragStart}
       onClick={onClick}
       className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-all duration-150 border-l-2
@@ -66,9 +68,13 @@ function ChannelRow({ channel, active, onClick, onDragStart }) {
         <div className="flex items-center justify-between gap-2 mt-0.5">
           <p className="text-xs text-neutral-500 truncate">{msgPreview}</p>
           {channel.unread_count > 0 && (
-            <span className="bg-accent text-black text-[10px] font-bold min-w-[18px] h-[18px] rounded-full flex items-center justify-center flex-shrink-0">
+            <span aria-label={`${channel.unread_count} unread messages`} className="bg-accent text-black text-[10px] font-bold min-w-[18px] h-[18px] rounded-full flex items-center justify-center flex-shrink-0">
               {channel.unread_count > 99 ? '99+' : channel.unread_count}
             </span>
+          )}
+          {!(channel.unread_count > 0) && (channel.marked_unread || channel.unread_lower_bound > 0) && (
+            <span aria-label="Unread messages, count unavailable" title="Unread messages; exact count is not synced"
+              className="bg-accent w-2 h-2 rounded-full flex-shrink-0" />
           )}
         </div>
       </div>
@@ -445,6 +451,10 @@ export default function Workspace({ onLogout }) {
   const [activeTab, setActiveTab] = useState(null)
   const [activeJid, setActiveJid] = useState(null)
   const [messages, setMessages] = useState([])
+  const [loadedJid, setLoadedJid] = useState(null)
+  const activeJidRef = useRef(activeJid)
+  activeJidRef.current = activeJid
+  const channelLoadVersion = useRef(0)
   const [msgInput, setMsgInput] = useState('')
   const [waStatus, setWaStatus] = useState('close')
   const [waLinked, setWaLinked] = useState(true)
@@ -481,15 +491,18 @@ export default function Workspace({ onLogout }) {
       loadChannels()
     },
     onStatus: (data) => setWaStatus(data.status),
+    onChannelUpdate: () => loadChannels(),
   })
 
   const loadChannels = useCallback(() => {
+    const version = ++channelLoadVersion.current
     const params = new URLSearchParams()
     if (activeTab) params.set('tab', activeTab)
     if (search) params.set('search', search)
     const qs = params.toString()
     api('/channels' + (qs ? `?${qs}` : ''))
       .then(data => {
+        if (version !== channelLoadVersion.current) return
         setChannels(data)
         const totalMsgs = data.reduce((sum, c) => sum + (c.last_message ? 1 : 0), 0)
         setSyncStats({ channels: data.length, messages: totalMsgs })
@@ -525,16 +538,39 @@ export default function Workspace({ onLogout }) {
   const PAGE_SIZE = 50
 
   useEffect(() => {
+    setLoadedJid(null)
+    setMessages([])
     if (!activeJid) return
+    let active = true
+    const controller = new AbortController()
     setOlderState({ loading: false, exhausted: false })
     pendingScrollRestore.current = null
-    api(`/channels/${encodeURIComponent(activeJid)}/messages?limit=${PAGE_SIZE}`)
+    api(`/channels/${encodeURIComponent(activeJid)}/messages?limit=${PAGE_SIZE}`, { signal: controller.signal })
       .then(msgs => {
-        setMessages(msgs.reverse())
+        if (!active) return
+        setMessages(previous => {
+          const fetched = new Map(msgs.map(message => [message.id, message]))
+          for (const message of previous) if (!fetched.has(message.id)) fetched.set(message.id, message)
+          return [...fetched.values()].sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+        })
+        setLoadedJid(activeJid)
         setOlderState({ loading: false, exhausted: msgs.length < PAGE_SIZE })
       })
-      .catch(() => setMessages([]))
+      .catch(() => { if (active) setMessages([]) })
+    return () => { active = false; controller.abort() }
   }, [activeJid])
+
+  const onConversationRead = useCallback((jid, state) => {
+    // Invalidate an older in-flight sidebar request before applying the ack.
+    channelLoadVersion.current++
+    setChannels(previous => previous.map(channel => channel.jid === jid
+      ? { ...channel, unread_count: state.unread_count, unread_known: true,
+          unread_lower_bound: state.unread_count, marked_unread: false, unread_mentions: state.unread_mentions }
+      : channel))
+  }, [])
+  const latestMessage = messages[messages.length - 1]
+  useConversationRead({ jid: activeJid, ready: loadedJid === activeJid && Boolean(openChannel),
+    messageId: latestMessage?.id, timestamp: latestMessage?.timestamp, onRead: onConversationRead })
 
   // Without this the console only ever showed the newest 50 messages, so a
   // chat with years of history looked like it began a few weeks ago.
@@ -543,6 +579,7 @@ export default function Workspace({ onLogout }) {
     const oldest = messages[0]
     if (!oldest) return
 
+    const requestedJid = activeJid
     setOlderState(s => ({ ...s, loading: true }))
     const pane = messagePaneRef.current
     pendingScrollRestore.current = pane ? pane.scrollHeight - pane.scrollTop : null
@@ -552,12 +589,14 @@ export default function Workspace({ onLogout }) {
         `/channels/${encodeURIComponent(activeJid)}/messages` +
         `?limit=${PAGE_SIZE}&before=${encodeURIComponent(oldest.timestamp)}`
       )
+      if (activeJidRef.current !== requestedJid) return
       setMessages(prev => {
         const seen = new Set(prev.map(m => m.id))
         return [...older.reverse().filter(m => !seen.has(m.id)), ...prev]
       })
       setOlderState({ loading: false, exhausted: older.length < PAGE_SIZE })
     } catch (_) {
+      if (activeJidRef.current !== requestedJid) return
       pendingScrollRestore.current = null
       setOlderState(s => ({ ...s, loading: false }))
     }
@@ -568,6 +607,7 @@ export default function Workspace({ onLogout }) {
   // WhatsApp Web does when you scroll beyond its own cache.
   const fetchOlderFromWhatsApp = useCallback(async () => {
     if (!activeJid || olderState.loading) return
+    const requestedJid = activeJid
     setOlderState(s => ({ ...s, loading: true, fetching: true }))
     try {
       await api(`/channels/${encodeURIComponent(activeJid)}/history`, {
@@ -576,10 +616,12 @@ export default function Workspace({ onLogout }) {
       })
       // The phone answers out of band; give it a moment, then look again.
       await new Promise(r => setTimeout(r, 4000))
+      if (activeJidRef.current !== requestedJid) return
       const older = await api(
         `/channels/${encodeURIComponent(activeJid)}/messages` +
         `?limit=${PAGE_SIZE}&before=${encodeURIComponent(messages[0]?.timestamp || new Date().toISOString())}`
       )
+      if (activeJidRef.current !== requestedJid) return
       if (older.length > 0) {
         setMessages(prev => {
           const seen = new Set(prev.map(m => m.id))
@@ -590,6 +632,7 @@ export default function Workspace({ onLogout }) {
         setOlderState({ loading: false, exhausted: true, fetching: false, noneLeft: true })
       }
     } catch (err) {
+      if (activeJidRef.current !== requestedJid) return
       setOlderState(s => ({ ...s, loading: false, fetching: false, error: err.message }))
     }
   }, [activeJid, messages, olderState.loading])
@@ -795,6 +838,9 @@ export default function Workspace({ onLogout }) {
           onDrop={(e) => handleDrop(e, activeTab)}
         >
           <SearchBar value={search} onChange={(e) => setSearch(e.target.value)} />
+          {channels.some(channel => channel.unread_known === false) && (
+            <p className="px-3 pb-2 text-[10px] text-neutral-500">Some chats have no synced read state yet.</p>
+          )}
           <div className="flex-1 overflow-y-auto">
             {channels.length === 0 && (
               <div className="px-4 py-8 text-center">
