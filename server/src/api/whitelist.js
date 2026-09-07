@@ -1,6 +1,7 @@
 import { nanoid } from 'nanoid'
 import { toJid } from '../util/jid.js'
 import { db } from '../db/index.js'
+import { canonicalJid, expandJids } from '../db/lidmap.js'
 import { requireScope } from '../middleware/token.js'
 
 export default async function whitelistRoutes(fastify) {
@@ -24,12 +25,20 @@ export default async function whitelistRoutes(fastify) {
       return reply.code(400).send({ error: 'A valid phone number or chat address is required', code: 'BAD_INPUT' })
     }
 
+    if (label != null && typeof label !== 'string') {
+      return reply.code(400).send({ error: 'Label must be text', code: 'BAD_INPUT' })
+    }
+    const aliases = expandJids(normalizedJid)
+    const existing = db.prepare('SELECT id FROM whitelist WHERE jid = ?')
+    if (aliases.some(alias => existing.get(alias))) {
+      return reply.code(409).send({ error: 'Contact already whitelisted', code: 'DUPLICATE' })
+    }
     const id = nanoid()
 
     try {
       db.prepare(
         'INSERT INTO whitelist (id, jid, label) VALUES (?, ?, ?)'
-      ).run(id, normalizedJid, label || null)
+      ).run(id, canonicalJid(normalizedJid), label?.trim() || null)
     } catch (err) {
       if (err.message.includes('UNIQUE')) {
         return reply.code(409).send({ error: 'JID already whitelisted', code: 'DUPLICATE' })

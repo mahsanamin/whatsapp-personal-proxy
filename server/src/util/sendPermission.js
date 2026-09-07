@@ -1,5 +1,6 @@
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { expandJids } from '../db/lidmap.js'
 import { isGroup } from './jid.js'
 
 /**
@@ -60,7 +61,8 @@ export function checkSendPermission(request, jid) {
 
 function isAllowed(jid) {
   try {
-    return Boolean(db.prepare('SELECT id FROM whitelist WHERE jid = ?').get(jid))
+    const lookup = db.prepare('SELECT id FROM whitelist WHERE jid = ?')
+    return expandJids(jid).some(alias => Boolean(lookup.get(alias)))
   } catch (_) {
     // Fail closed: an unreadable allow list must not become an open one.
     return false

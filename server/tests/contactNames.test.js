@@ -50,6 +50,22 @@ test('repair restores incoming names, preserves unrelated names, and retains old
     assert.equal(db.prepare('SELECT display_name FROM channel_meta WHERE jid = ?').get(lid).display_name, 'Friend')
     assert.equal(db.prepare('SELECT display_name FROM channel_meta WHERE jid = ?').get(pn).display_name, 'Address Book Friend')
     assert.equal(db.prepare('SELECT old_name FROM contact_name_repairs WHERE jid = ?').get(lid).old_name, 'Owner')
+    saveContactName(db, lid, 'Fresh Profile', 1)
     assert.equal(repairContactNames(db), 0)
+    assert.equal(db.prepare('SELECT display_name FROM channel_meta WHERE jid = ?').get(lid).display_name, 'Fresh Profile')
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM completed_repairs').get().count, 1)
+  } finally { db.close() }
+})
+
+test('a failed repair does not leave a completion marker and can be retried', () => {
+  const db = database()
+  try {
+    db.prepare('INSERT INTO channel_meta (jid, display_name) VALUES (?, ?)').run(pn, 'Legacy')
+    db.exec(`CREATE TRIGGER fail_repair BEFORE UPDATE ON channel_meta BEGIN SELECT RAISE(ABORT, 'test failure'); END`)
+    assert.throws(() => repairContactNames(db), /test failure/)
+    assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'completed_repairs'").get(), undefined)
+    db.exec('DROP TRIGGER fail_repair')
+    repairContactNames(db)
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM completed_repairs').get().count, 1)
   } finally { db.close() }
 })

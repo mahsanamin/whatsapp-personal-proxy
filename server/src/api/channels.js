@@ -2,7 +2,7 @@ import { db } from '../db/index.js'
 import { requireScope } from '../middleware/token.js'
 import { ensureConnected } from '../wa/client.js'
 import { channelType, toJid } from '../util/jid.js'
-import { canonicalJidMap, expandJids } from '../db/lidmap.js'
+import { canonicalJid, canonicalJidMap, expandJids, resolveNames } from '../db/lidmap.js'
 import { saveContactName } from '../db/contactNames.js'
 import { loadMessageKey } from '../util/messageRef.js'
 
@@ -184,17 +184,26 @@ export default async function channelRoutes(fastify) {
   fastify.get('/channels/:jid', {
     preHandler: requireScope('channels:read'),
   }, async (request, reply) => {
-    const jid = toJid(request.params.jid) || request.params.jid
-    const channel = db.prepare('SELECT * FROM channel_meta WHERE jid = ?').get(jid)
+    const jid = canonicalJid(toJid(request.params.jid) || request.params.jid)
+    const jids = expandJids(jid)
+    const lookup = db.prepare('SELECT * FROM channel_meta WHERE jid = ?')
+    const channel = jids.map(alias => lookup.get(alias)).find(Boolean)
     if (!channel) {
       return reply.code(404).send({ error: 'Channel not found', code: 'NOT_FOUND' })
     }
 
     const lastMessage = db.prepare(
-      'SELECT body, timestamp, type FROM messages WHERE jid = ? ORDER BY timestamp DESC LIMIT 1'
-    ).get(jid)
+      `SELECT body, timestamp, type FROM messages WHERE jid IN (${jids.map(() => '?').join(',')}) ORDER BY timestamp DESC LIMIT 1`
+    ).get(...jids)
 
-    return { ...channel, type: channelType(jid), last_message: lastMessage || null }
+    return {
+      ...channel,
+      jid,
+      display_name: resolveNames([jid]).get(jid) || channel.display_name,
+      type: channelType(jid),
+      alt_jids: jids.filter(alias => alias !== jid),
+      last_message: lastMessage || null,
+    }
   })
 
   // Mark a conversation read. WhatsApp does not tell us when the owner reads
@@ -204,13 +213,24 @@ export default async function channelRoutes(fastify) {
   }, async (request, reply) => {
     const requested = toJid(request.params.jid) || request.params.jid
     const jids = expandJids(requested)
-    const upTo = request.body?.up_to || new Date().toISOString()
-
+    const supplied = request.body?.up_to
+    const timestamp = supplied === undefined ? Date.now() : typeof supplied === 'string' ? Date.parse(supplied) : NaN
+    if (!Number.isFinite(timestamp)) {
+      return reply.code(400).send({ error: 'up_to must be a valid timestamp', code: 'BAD_INPUT' })
+    }
+    let upTo = new Date(Math.min(timestamp, Date.now())).toISOString()
     const stmt = db.prepare(`
       INSERT INTO channel_meta (jid, last_read_at) VALUES (?, ?)
       ON CONFLICT(jid) DO UPDATE SET last_read_at = excluded.last_read_at
     `)
     const apply = db.transaction(() => {
+      // A delayed request from another tab must not move the read cursor back.
+      const previous = db.prepare('SELECT last_read_at FROM channel_meta WHERE jid = ?')
+      for (const jid of jids) {
+        const value = previous.get(jid)?.last_read_at
+        const time = value ? Date.parse(value) : NaN
+        if (Number.isFinite(time) && time > Date.parse(upTo)) upTo = new Date(time).toISOString()
+      }
       for (const jid of jids) stmt.run(jid, upTo)
     })
     apply()
@@ -301,35 +321,46 @@ export default async function channelRoutes(fastify) {
   fastify.patch('/channels/:jid', {
     preHandler: fastify.requireSession,
   }, async (request, reply) => {
-    const { jid } = request.params
+    const jid = canonicalJid(toJid(request.params.jid) || request.params.jid)
+    const jids = expandJids(jid)
+    const body = request.body || {}
     const allowed = ['tab_id', 'is_muted', 'is_archived', 'priority', 'notes', 'display_name']
     const updates = []
     const params = []
 
     for (const key of allowed) {
-      if (request.body[key] !== undefined) {
-        updates.push(`${key} = ?`)
-        params.push(request.body[key])
-      }
+      if (body[key] === undefined) continue
+      let value = body[key]
+      const flag = key === 'is_muted' || key === 'is_archived'
+      const valid = flag ? [true, false, 0, 1].includes(value)
+        : key === 'priority' ? Number.isSafeInteger(value)
+          : value === null || typeof value === 'string'
+      if (!valid) return reply.code(400).send({ error: `Invalid ${key}`, code: 'BAD_INPUT' })
+      if (flag) value = Number(value)
+      if (key === 'display_name') value = value?.trim() || null
+      updates.push(`${key} = ?`)
+      params.push(value)
     }
 
     if (updates.length === 0) {
       return reply.code(400).send({ error: 'No valid fields to update', code: 'BAD_INPUT' })
     }
-
-    if (request.body.display_name !== undefined) updates.push('name_rank = 4')
-    updates.push('updated_at = CURRENT_TIMESTAMP')
-    params.push(jid)
-
-    const result = db.prepare(
-      `UPDATE channel_meta SET ${updates.join(', ')} WHERE jid = ?`
-    ).run(...params)
-
-    if (result.changes === 0) {
+    if (body.tab_id != null && !db.prepare('SELECT id FROM tabs WHERE id = ?').get(body.tab_id)) {
+      return reply.code(400).send({ error: 'Tab not found', code: 'BAD_INPUT' })
+    }
+    const placeholders = jids.map(() => '?').join(',')
+    if (!db.prepare(`SELECT jid FROM channel_meta WHERE jid IN (${placeholders}) LIMIT 1`).get(...jids)) {
       return reply.code(404).send({ error: 'Channel not found', code: 'NOT_FOUND' })
     }
 
-    if (request.body.display_name) saveContactName(db, jid, request.body.display_name, 4)
+    if (body.display_name !== undefined) updates.push('name_rank = 4')
+    updates.push('updated_at = CURRENT_TIMESTAMP')
+    db.transaction(() => {
+      const ensure = db.prepare('INSERT OR IGNORE INTO channel_meta (jid) VALUES (?)')
+      for (const alias of jids) ensure.run(alias)
+      db.prepare(`UPDATE channel_meta SET ${updates.join(', ')} WHERE jid IN (${placeholders})`).run(...params, ...jids)
+      if (body.display_name) saveContactName(db, jid, body.display_name, 4)
+    })()
     const updated = db.prepare('SELECT * FROM channel_meta WHERE jid = ?').get(jid)
     fastify.eventBus.emit('channel.update', updated)
     return updated

@@ -7,9 +7,10 @@ export default async function tabRoutes(fastify) {
     preHandler: requireScope('tabs:manage'),
   }, async () => {
     return db.prepare(`
-      SELECT t.*, COUNT(cm.jid) AS channel_count
+      SELECT t.*, COUNT(DISTINCT COALESCE(lm.pn, cm.jid)) AS channel_count
       FROM tabs t
       LEFT JOIN channel_meta cm ON cm.tab_id = t.id
+      LEFT JOIN lid_map lm ON lm.lid = cm.jid
       GROUP BY t.id
       ORDER BY t.position
     `).all()

@@ -10,19 +10,22 @@ import { PN_SUFFIX, LID_SUFFIX } from '../util/jid.js'
  */
 export function expandJids(jid) {
   if (typeof jid !== 'string' || !jid) return []
+  // Strip only the device suffix, never the address namespace.
+  jid = jid.replace(/:\d+@/, '@')
   const out = new Set([jid])
 
   try {
-    if (jid.endsWith(LID_SUFFIX)) {
-      const row = db.prepare('SELECT pn FROM lid_map WHERE lid = ?').get(jid)
-      if (row?.pn) out.add(row.pn)
-    } else if (jid.endsWith(PN_SUFFIX)) {
-      for (const row of db.prepare('SELECT lid FROM lid_map WHERE pn = ?').all(jid)) {
-        if (row?.lid) out.add(row.lid)
+    const pn = jid.endsWith(LID_SUFFIX)
+      ? db.prepare('SELECT pn FROM lid_map WHERE lid = ?').get(jid)?.pn
+      : jid.endsWith(PN_SUFFIX) ? jid : null
+    if (pn) {
+      out.add(pn)
+      for (const row of db.prepare('SELECT lid FROM lid_map WHERE pn = ?').all(pn)) {
+        if (row.lid) out.add(row.lid)
       }
     }
   } catch (_) {
-    // lid_map is a lookup aid; a failure here must not break a read
+    // A missing lookup must not turn equal numeric IDs into an identity match.
   }
 
   return [...out]

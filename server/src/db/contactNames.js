@@ -20,6 +20,10 @@ export function saveContactName(db, jid, name, rank = 1) {
 // Keep the previous value locally, so repairs remain reversible.
 export function repairContactNames(db) {
   return db.transaction(() => {
+    db.exec(`CREATE TABLE IF NOT EXISTS completed_repairs (
+      name TEXT PRIMARY KEY, completed_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )`)
+    if (db.prepare('SELECT name FROM completed_repairs WHERE name = ?').get('contact-names-v1')) return 0
     db.exec(`CREATE TABLE IF NOT EXISTS contact_name_repairs (
       jid TEXT PRIMARY KEY, old_name TEXT, repaired_at TEXT DEFAULT CURRENT_TIMESTAMP
     )`)
@@ -62,6 +66,7 @@ export function repairContactNames(db) {
     // Unproven legacy names may be address-book names: preserve them until a
     // fresh contact or chat event supplies stronger evidence.
     db.prepare('UPDATE channel_meta SET name_rank = 2 WHERE name_rank = 0 AND display_name IS NOT NULL').run()
+    db.prepare('INSERT INTO completed_repairs (name) VALUES (?)').run('contact-names-v1')
     return repaired
   })()
 }

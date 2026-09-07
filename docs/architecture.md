@@ -145,4 +145,20 @@ On connection, legacy names matching an outgoing profile name for that recipient
 are repaired from incoming history. Previous values are kept locally in
 `contact_name_repairs`. If no incoming name is available, the UI falls back to the
 address until contact sync provides one. Messages and allow-list entries are
-preserved. Repair is idempotent and does not infer identity from matching names.
+preserved. A completion marker makes the repair run once, with the marker committed in the
+same transaction as the corrections. Failed repairs can retry; successful ones
+do not rescan the archive or overwrite newer profile names on reconnect.
+Repair does not infer identity from matching names.
+
+### Conversation operations
+
+A known phone-number address and all of its mapped LIDs are one conversation.
+Detail reads include every address; metadata edits and read cursors update all
+addresses atomically. Delayed read requests cannot move the cursor backwards.
+Tab counts count conversations, not address rows.
+
+Allow-list checks use the same verified mapping. New entries use the canonical
+phone-number address when known, and attempts to allow another address of an
+already allowed contact return `DUPLICATE`. Existing LID entries remain effective.
+Names and coincidentally equal numeric IDs never grant send permission; token
+scope requirements still apply independently.
