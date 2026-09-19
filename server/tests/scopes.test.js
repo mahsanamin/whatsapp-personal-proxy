@@ -35,6 +35,14 @@ test('every scope is offered in the web console', () => {
   }
 })
 
+test('every scope has a plain-language label in the web console', () => {
+  const ui = read('../../ui/src/pages/Tokens.jsx')
+  const block = ui.match(/const SCOPE_LABELS = \{([\s\S]*?)\n\}/)
+  assert.ok(block, 'SCOPE_LABELS declaration not found')
+  const labelled = [...block[1].matchAll(/'([^']+)':\s*'[^']+'/g)].map(m => m[1])
+  assert.deepEqual(labelled, EXPECTED)
+})
+
 test('every scope is documented in the README', () => {
   const readme = read('../../README.md')
   for (const scope of EXPECTED) {

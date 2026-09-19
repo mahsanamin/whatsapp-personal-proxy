@@ -31,7 +31,7 @@ and unreachable by any token.
 
 ## Writes are gated twice
 
-The server enforces the destination (`PERSONAL_NUMBERS`, then the whitelist, then group
+The server enforces the destination (linked account and `PERSONAL_NUMBERS`, then the whitelist, then group
 membership). The CLI additionally requires a confirmation or `--yes`. Both layers stay:
 the server one is the real control, the CLI one stops an agent sending on a guess.
 

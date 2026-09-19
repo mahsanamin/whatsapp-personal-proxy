@@ -6,9 +6,21 @@ const SCOPE_GROUPS = {
   Personal: ['personal:send'],
   Others: ['others:send', 'others:whitelist:read', 'others:whitelist:manage'],
   Groups: ['groups:send'],
-  Channels: ['channels:read', 'channels:summarize'],
+  'Chats & Messages': ['channels:read', 'channels:summarize'],
   Tabs: ['tabs:manage'],
   Admin: ['wa:admin'],
+}
+
+const SCOPE_LABELS = {
+  'personal:send': 'Send to personal numbers',
+  'others:send': 'Send to allowed contacts',
+  'others:whitelist:read': 'View allow list',
+  'others:whitelist:manage': 'Manage allow list',
+  'groups:send': 'Send to allowed groups',
+  'channels:read': 'Read all chats & messages',
+  'channels:summarize': 'Summarize chats & messages',
+  'tabs:manage': 'Manage tabs',
+  'wa:admin': 'Manage WhatsApp connection',
 }
 
 export default function Tokens() {
@@ -161,13 +173,14 @@ export default function Tokens() {
                         key={scope}
                         type="button"
                         onClick={() => toggleScope(scope)}
-                        className={`text-xs px-3 py-1.5 rounded-lg transition-all
+                        className={`text-left px-3 py-1.5 rounded-lg transition-all
                           ${scopes.includes(scope)
                             ? 'bg-accent/20 text-accent border border-accent/40'
                             : 'bg-neutral-800/60 text-neutral-500 border border-neutral-700 hover:text-white hover:border-neutral-600'
                           }`}
                       >
-                        {scope}
+                        <span className="block text-xs">{SCOPE_LABELS[scope]}</span>
+                        <span className="block text-[10px] font-mono opacity-70 mt-0.5">{scope}</span>
                       </button>
                     ))}
                   </div>
@@ -217,8 +230,9 @@ export default function Tokens() {
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {t.scopes.map(s => (
-                  <span key={s} className="text-[11px] bg-neutral-800/80 text-neutral-400 rounded px-2 py-0.5">
-                    {s}
+                  <span key={s} className="bg-neutral-800/80 text-neutral-400 rounded px-2 py-1">
+                    <span className="block text-[11px]">{SCOPE_LABELS[s]}</span>
+                    <span className="block text-[9px] font-mono text-neutral-500 mt-0.5">{s}</span>
                   </span>
                 ))}
               </div>

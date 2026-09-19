@@ -1,7 +1,13 @@
 import crypto from 'node:crypto'
 import { config } from '../config.js'
 import { identifyCaller } from '../middleware/token.js'
-import { getSock, isLinked, clearSession } from '../wa/client.js'
+import {
+  getSock,
+  isLinked,
+  clearSession,
+  getPersonalNumbers,
+  getLinkedPhoneNumber,
+} from '../wa/client.js'
 
 function constantTimeEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false
@@ -60,7 +66,8 @@ export default async function authRoutes(fastify) {
       },
       // Only revealed to a credential that could message them anyway; lets the
       // CLI pick personal/send vs others/send in one round trip.
-      personal_numbers: caller.scopes.includes('personal:send') ? config.personalNumbers : undefined,
+      personal_numbers: caller.scopes.includes('personal:send') ? getPersonalNumbers() : undefined,
+      linked_number: caller.scopes.includes('personal:send') ? getLinkedPhoneNumber() : undefined,
     }
   })
 

@@ -10,6 +10,7 @@ function Row({ children, tone = 'default' }) {
 export default function Whitelist() {
   const [entries, setEntries] = useState([])
   const [personal, setPersonal] = useState([])
+  const [linkedNumber, setLinkedNumber] = useState(null)
   const [query, setQuery] = useState('')
   const [results, setResults] = useState([])
   const [manual, setManual] = useState('')
@@ -21,7 +22,10 @@ export default function Whitelist() {
 
   useEffect(() => {
     load()
-    api('/auth/test').then(d => setPersonal(d.personal_numbers || [])).catch(() => {})
+    api('/auth/test').then(d => {
+      setPersonal(d.personal_numbers || [])
+      setLinkedNumber(d.linked_number || null)
+    }).catch(() => {})
   }, [])
 
   // Look chats up by name so a person can be allowed without anyone having to
@@ -58,6 +62,7 @@ export default function Whitelist() {
 
   const already = (jid, aliases = []) => entries.some(e => e.jid === jid || aliases.includes(e.jid))
   const pretty = (jid) => (jid.endsWith('@g.us') ? 'Group' : jid.endsWith('@lid') ? 'Phone number not synced' : '+' + jid.split('@')[0])
+  const sameNumber = (a, b) => a && b && a.replace(/\D/g, '') === b.replace(/\D/g, '')
 
   return (
     <div className="min-h-screen bg-bg">
@@ -161,7 +166,9 @@ export default function Whitelist() {
                 <Row key={n} tone="personal">
                   <div>
                     <p className="text-sm text-neutral-200">{n}</p>
-                    <p className="text-[11px] text-neutral-500">From PERSONAL_NUMBERS in .env</p>
+                    <p className="text-[11px] text-neutral-500">
+                      {sameNumber(n, linkedNumber) ? 'Linked WhatsApp account' : 'Additional number from PERSONAL_NUMBERS in .env'}
+                    </p>
                   </div>
                   <span className="text-[11px] text-accent">always allowed</span>
                 </Row>

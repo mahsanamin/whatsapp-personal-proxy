@@ -27,7 +27,7 @@ Common codes: `BAD_INPUT`, `UNAUTHORIZED`, `INVALID_TOKEN`, `MISSING_SCOPE`, `NO
 
 | Scope | Unlocks |
 |---|---|
-| `personal:send` | Send to your own `PERSONAL_NUMBERS` |
+| `personal:send` | Send to the linked account and additional `PERSONAL_NUMBERS` |
 | `others:send` | Send to whitelisted numbers |
 | `others:whitelist:read` | Read the whitelist |
 | `others:whitelist:manage` | Add to and remove from the whitelist |
@@ -44,7 +44,8 @@ Common codes: `BAD_INPUT`, `UNAUTHORIZED`, `INVALID_TOKEN`, `MISSING_SCOPE`, `NO
 | `GET` | `/api/health` | none | `{ ok, wa, uptime }` |
 | `GET` | `/api/auth/test` | any credential | Identity, scopes, WhatsApp link state. `wpp connect` calls this |
 
-`/api/auth/test` also returns `personal_numbers` when the caller holds `personal:send`,
+`/api/auth/test` also returns `personal_numbers` when the caller holds `personal:send`.
+The list includes both `PERSONAL_NUMBERS` and the linked WhatsApp account itself,
 so the CLI can route a send without a wasted round trip.
 
 ## Web console session
@@ -96,13 +97,13 @@ All three are rate limited by `RATE_LIMIT_SEND`.
 
 | Method | Path | Scope | Body |
 |---|---|---|---|
-| `POST` | `/api/personal/send` | `personal:send` | `{ to, message }` — `to` must be in `PERSONAL_NUMBERS` |
+| `POST` | `/api/personal/send` | `personal:send` | `{ to, message }` — `to` must be the linked account or in `PERSONAL_NUMBERS` |
 | `POST` | `/api/others/send` | `others:send` | `{ to, message }` — `to` must be whitelisted |
 | `POST` | `/api/groups/send` | `groups:send` | `{ jid, message }` — `jid` must end in `@g.us` **and be on the allow list** |
 | `POST` | `/api/send` | session | `{ jid, message }` — console only, reaches any JID. Never exposed to a token under any scope |
 
 **Who may message whom.** The console holds a session and may message anyone.
-An API key may only reach `PERSONAL_NUMBERS` plus the entries on the allow list
+An API key may only reach the linked account, `PERSONAL_NUMBERS`, and entries on the allow list
 (`/api/whitelist`, managed in the console under **Allow list**). This applies to
 groups as well as DMs: a key with `groups:send` can only message groups that
 were explicitly allowed.

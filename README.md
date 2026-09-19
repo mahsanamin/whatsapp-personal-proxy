@@ -73,7 +73,7 @@ cd whatsapp-personal-proxy
 # Edit .env and set:
 #   ADMIN_PASS  — anything but "changeme"
 #   JWT_SECRET  — openssl rand -hex 32
-#   PERSONAL_NUMBERS — your own E.164 numbers, comma-separated
+#   PERSONAL_NUMBERS — optional additional owned numbers, comma-separated
 #   PUBLIC_URL  — how you'll reach the UI (http://localhost:3900 is fine to start)
 
 ./proxy start                       # docker compose up -d --build
@@ -177,7 +177,7 @@ annotated list. The important ones:
 |-------------------|---------------------------------------------------------|
 | `ADMIN_USER` / `ADMIN_PASS` | Web UI login                                  |
 | `JWT_SECRET`      | Session signing secret (≥32 chars)                      |
-| `PERSONAL_NUMBERS`| E.164 numbers that bypass the whitelist                 |
+| `PERSONAL_NUMBERS`| Optional additional owned numbers that bypass the whitelist |
 | `PUBLIC_URL`      | How the UI/CLI is reached publicly                      |
 | `COOKIE_SECURE`   | Force `Secure` cookie flag (auto from `PUBLIC_URL` if unset) |
 | `BIND_HOST`       | What the container nginx binds to (default `127.0.0.1`) |
@@ -193,7 +193,7 @@ more scopes; the API rejects calls outside the granted scopes.
 
 | Scope                       | What it unlocks                                          |
 |-----------------------------|----------------------------------------------------------|
-| `personal:send`             | Send messages to your own `PERSONAL_NUMBERS`             |
+| `personal:send`             | Send to the linked account and additional owned numbers  |
 | `others:send`               | Send to whitelisted JIDs                                 |
 | `others:whitelist:read`     | List the whitelist                                       |
 | `others:whitelist:manage`   | Add/remove from the whitelist                            |

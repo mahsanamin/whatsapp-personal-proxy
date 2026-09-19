@@ -32,14 +32,22 @@ test('a group message from an API key requires the group to be allowed', () => {
   assert.ok(read('../src/api/groups.js').includes('sendText'), 'groups/send bypasses the shared guard')
 })
 
-test('personal sends are limited to the configured numbers', () => {
+test('personal sends include the linked account and keep their route contract', () => {
   const guard = read('../src/util/sendPermission.js')
-  assert.ok(guard.includes('config.personalNumbers'), 'the own-numbers check is gone')
+  assert.ok(guard.includes('isOwnJid(jid)'), 'the linked account is not recognized as personal')
   assert.ok(
     guard.includes("scopes.includes('personal:send')"),
     'reaching your own numbers must still require the personal:send scope',
   )
-  assert.ok(read('../src/api/personal.js').includes('sendText'), 'personal/send bypasses the shared guard')
+  assert.ok(guard.includes('NOT_PERSONAL_NUMBER'), 'personal/send lost its route-specific refusal')
+  assert.ok(
+    read('../src/api/auth.js').includes('getPersonalNumbers()'),
+    'auth/test does not teach the CLI that the linked account is personal',
+  )
+  assert.ok(
+    read('../src/api/personal.js').includes("sendText(request, reply, jid, 'personal')"),
+    'personal/send no longer identifies itself to the shared guard',
+  )
 })
 
 test('the unrestricted send route is reachable only by the console', () => {
@@ -74,5 +82,13 @@ test('permission is decided before the request body is validated', () => {
     guardAt < bodyAt,
     'a caller who may not message this destination should not learn whether ' +
     'their request was otherwise well formed',
+  )
+})
+
+test('PERSONAL_NUMBERS is optional because the linked account is detected', () => {
+  const config = read('../src/config.js')
+  assert.ok(
+    config.includes("(process.env.PERSONAL_NUMBERS || '')"),
+    'an empty PERSONAL_NUMBERS setting would prevent the server from starting',
   )
 })

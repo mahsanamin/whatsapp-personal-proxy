@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { toJid, isGroup, channelType } from '../src/util/jid.js'
+import { toJid, isGroup, channelType, jidUser } from '../src/util/jid.js'
 
 test('toJid normalises phone numbers to a WhatsApp JID', () => {
   assert.equal(toJid('+971501234567'), '971501234567@s.whatsapp.net')
@@ -26,6 +26,14 @@ test('isGroup only matches @g.us', () => {
   assert.equal(isGroup('120363000000000000@g.us'), true)
   assert.equal(isGroup('971501234567@s.whatsapp.net'), false)
   assert.equal(isGroup(null), false)
+})
+
+test('jidUser treats a linked-device JID as the same phone-number user', () => {
+  assert.equal(jidUser('971501234567:32@s.whatsapp.net'), '971501234567')
+  assert.equal(jidUser('971501234567@s.whatsapp.net'), '971501234567')
+  assert.equal(jidUser('+971501234567'), null)
+  assert.equal(jidUser('971501234567@example.com'), null)
+  assert.equal(jidUser(null), null)
 })
 
 test('channelType classifies every JID flavour', () => {

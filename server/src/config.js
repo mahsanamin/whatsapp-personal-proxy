@@ -1,4 +1,4 @@
-const required = ['ADMIN_USER', 'ADMIN_PASS', 'JWT_SECRET', 'PERSONAL_NUMBERS']
+const required = ['ADMIN_USER', 'ADMIN_PASS', 'JWT_SECRET']
 
 for (const key of required) {
   if (!process.env[key]) {
@@ -37,7 +37,7 @@ export const config = {
   adminUser: process.env.ADMIN_USER,
   adminPass: process.env.ADMIN_PASS,
   jwtSecret: process.env.JWT_SECRET,
-  personalNumbers: process.env.PERSONAL_NUMBERS.split(',').map(n => n.trim()),
+  personalNumbers: (process.env.PERSONAL_NUMBERS || '').split(',').map(n => n.trim()).filter(Boolean),
   publicUrl,
   cookieSecure,
   // WhatsApp expires media from its CDN. Fetching only on demand means that by

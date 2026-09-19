@@ -1,7 +1,7 @@
-import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { expandJids } from '../db/lidmap.js'
 import { isGroup } from './jid.js'
+import { isOwnJid } from '../wa/client.js'
 
 /**
  * The single decision point for "may this caller message this JID".
@@ -11,15 +11,33 @@ import { isGroup } from './jid.js'
  *
  * Returns null when allowed, or { status, error, code } to send back.
  */
-export function checkSendPermission(request, jid) {
+export function checkSendPermission(request, jid, route = null) {
   if (!jid) {
     return { status: 400, error: 'A destination is required', code: 'BAD_INPUT' }
   }
 
-  // The console is the owner. It may message anyone.
-  if (request.session?.authenticated) return null
-
   const scopes = request.token?.scopes || []
+  const isSession = request.session?.authenticated
+  const isPersonal = isOwnJid(jid)
+
+  // Keep /personal/send's contract exact. Check the scope first so a token
+  // without personal:send cannot probe which numbers belong to the owner.
+  if (route === 'personal') {
+    if (!isSession && !scopes.includes('personal:send')) {
+      return { status: 403, error: 'Missing scope: personal:send', code: 'MISSING_SCOPE' }
+    }
+    if (!isPersonal) {
+      return {
+        status: 403,
+        error: 'Number is not one of the owner\'s personal numbers',
+        code: 'NOT_PERSONAL_NUMBER',
+      }
+    }
+    return null
+  }
+
+  // The console is the owner. It may message anyone.
+  if (isSession) return null
 
   if (isGroup(jid)) {
     if (!scopes.includes('groups:send')) {
@@ -34,10 +52,6 @@ export function checkSendPermission(request, jid) {
     }
     return null
   }
-
-  // One of the owner's own numbers.
-  const digits = jid.split('@')[0]
-  const isPersonal = config.personalNumbers.some(n => String(n).replace(/\D/g, '') === digits)
 
   if (isPersonal) {
     if (!scopes.includes('personal:send')) {
@@ -70,8 +84,8 @@ function isAllowed(jid) {
 }
 
 /** Reply with the refusal, or return false if the send may proceed. */
-export function refuseIfNotAllowed(request, reply, jid) {
-  const refusal = checkSendPermission(request, jid)
+export function refuseIfNotAllowed(request, reply, jid, route = null) {
+  const refusal = checkSendPermission(request, jid, route)
   if (!refusal) return false
   reply.code(refusal.status).send({ error: refusal.error, code: refusal.code })
   return true

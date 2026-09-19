@@ -38,8 +38,8 @@ cmd_init() {
   cat <<'MSG'
 
 Next:
-  1. Edit .env — set ADMIN_PASS, JWT_SECRET (openssl rand -hex 32),
-     PERSONAL_NUMBERS, and PUBLIC_URL.
+  1. Edit .env — set ADMIN_PASS, JWT_SECRET (openssl rand -hex 32), and
+     PUBLIC_URL. PERSONAL_NUMBERS is optional for additional owned handsets.
   2. ./proxy start
   3. Open PUBLIC_URL, sign in, and scan the QR code.
 MSG

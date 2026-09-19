@@ -15,12 +15,14 @@ import { canonicalJid, resolveNames, expandJids } from '../db/lidmap.js'
 import { saveContactName, repairContactNames } from '../db/contactNames.js'
 import { applyUnreadUpdate, unreadState, recordUnreadMessage, applyUnreadReceipt } from '../db/unread.js'
 import { incomingContact } from '../util/contactIdentity.js'
+import { jidUser } from '../util/jid.js'
 
 const MAX_RETRIES = 10
 let retries = 0
 let currentSock = null
 let sessionDir = config.waSessionPath
 let linkedCache = null
+let linkedPhoneNumber = null
 
 // Every address that means "the owner". A mention can name the phone-number
 // JID or the @lid one, and PERSONAL_NUMBERS covers a second handset.
@@ -29,12 +31,32 @@ let myJids = new Set()
 function rememberMyJids(creds) {
   const found = new Set()
   for (const value of [creds?.me?.id, creds?.me?.lid]) {
-    if (typeof value === 'string' && value) found.add(value.split(':')[0].split('@')[0])
+    const user = jidUser(value)
+    if (user) found.add(user)
   }
   for (const number of config.personalNumbers) {
     found.add(String(number).replace(/\D/g, ''))
   }
+  linkedPhoneNumber = jidUser(creds?.me?.id)
   myJids = found
+}
+
+export function isOwnJid(jid) {
+  const user = jidUser(jid)
+  const liveUser = jidUser(currentSock?.user?.id)
+  return Boolean(user && (myJids.has(user) || user === liveUser))
+}
+
+export function getPersonalNumbers() {
+  const numbers = [...config.personalNumbers]
+  if (linkedPhoneNumber && !numbers.some(number => String(number).replace(/\D/g, '') === linkedPhoneNumber)) {
+    numbers.push(`+${linkedPhoneNumber}`)
+  }
+  return numbers
+}
+
+export function getLinkedPhoneNumber() {
+  return linkedPhoneNumber ? `+${linkedPhoneNumber}` : null
 }
 
 function mentionsMe(message) {

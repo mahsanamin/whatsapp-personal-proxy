@@ -23,6 +23,17 @@ export function isGroup(jid) {
   return typeof jid === 'string' && jid.endsWith(GROUP_SUFFIX)
 }
 
+// Baileys identifies a linked device as `number:device@s.whatsapp.net` while
+// API callers normally use `number@s.whatsapp.net`. Both belong to the same
+// WhatsApp user, so comparisons must ignore the device suffix.
+export function jidUser(jid) {
+  if (typeof jid !== 'string') return null
+  const parts = jid.split('@')
+  if (parts.length !== 2 || ![PN_SUFFIX.slice(1), LID_SUFFIX.slice(1)].includes(parts[1])) return null
+  const user = parts[0].split(':')[0]
+  return /^\d+$/.test(user) ? user : null
+}
+
 export function channelType(jid) {
   if (isGroup(jid)) return 'group'
   if (typeof jid === 'string' && jid.endsWith(NEWSLETTER_SUFFIX)) return 'channel'

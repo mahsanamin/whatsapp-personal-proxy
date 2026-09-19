@@ -111,7 +111,7 @@ Writes are protected twice: the server must allow the destination, and the CLI r
 interactive confirmation or `--yes`.
 
 ```bash
-wpp send +15555550100 'note to self'     # a PERSONAL_NUMBERS number
+wpp send +15555550100 'note to self'     # the linked account or another owned number
 wpp send +971501234567 'hello'           # a whitelisted number
 wpp send "Family" 'on my way'            # a group, by name
 wpp send 1203630001@g.us 'on my way'     # a group, by JID
@@ -122,8 +122,8 @@ wpp send "Family" --text-stdin < message.txt
 `/api/personal/send`, everyone else to `/api/others/send`. Force one with
 `--route personal|others|group`.
 
-**The CLI can only message allowed destinations.** A token reaches your own
-`PERSONAL_NUMBERS` plus whatever is on the allow list — people *and* groups alike. Anything
+**The CLI can only message allowed destinations.** A token reaches the linked
+account, `PERSONAL_NUMBERS`, and whatever is on the allow list — people *and* groups alike. Anything
 else comes back `NOT_WHITELISTED`. Manage the list in the web console under **Allow list**,
 or with `wpp whitelist` below. The console itself is not restricted this way: from the
 browser you can message anyone.
@@ -241,7 +241,7 @@ Use `--pretty` before the subcommand for indented JSON. Stable error codes worth
 | `TARGET_NOT_FOUND` | The name matched no chat |
 | `AMBIGUOUS_TARGET` | The name matched several chats; `error.details.candidates` lists them |
 | `NOT_WHITELISTED` | Recipient is not on the whitelist |
-| `NOT_PERSONAL_NUMBER` | Number is not in `PERSONAL_NUMBERS` |
+| `NOT_PERSONAL_NUMBER` | Number is neither the linked account nor in `PERSONAL_NUMBERS` |
 | `MISSING_SCOPE` | The token lacks the scope this call needs |
 | `WA_DISCONNECTED` | WhatsApp is not linked; scan the QR code in the console |
 | `CONFIRMATION_REQUIRED` | A write was attempted non-interactively without `--yes` |

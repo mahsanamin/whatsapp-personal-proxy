@@ -11,7 +11,12 @@ bad configuration rather than running insecurely.
 | `ADMIN_USER` | Web console username |
 | `ADMIN_PASS` | Web console password. The server refuses to start while this is `changeme` |
 | `JWT_SECRET` | Session signing secret. Must be ≥32 characters and not the placeholder. `openssl rand -hex 32` |
-| `PERSONAL_NUMBERS` | Comma-separated E.164 numbers that bypass the whitelist. These are the numbers `personal:send` can reach |
+
+## Optional
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PERSONAL_NUMBERS` | empty | Additional owned E.164 numbers that `personal:send` can reach without the allow list. The linked WhatsApp account is always included automatically |
 
 ## Networking
 

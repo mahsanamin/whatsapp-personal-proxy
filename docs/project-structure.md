@@ -31,7 +31,7 @@ whatsapp-personal-proxy/
 │   │   │   ├── channels.js     Chat list, chat detail, live group list
 │   │   │   ├── messages.js     Message reads, search, media
 │   │   │   ├── events.js       SSE stream for the CLI
-│   │   │   ├── personal.js     Sends to PERSONAL_NUMBERS
+│   │   │   ├── personal.js     Sends to the linked account and PERSONAL_NUMBERS
 │   │   │   ├── others.js       Sends to whitelisted numbers
 │   │   │   ├── groups.js       Sends to groups
 │   │   │   ├── whitelist.js    Whitelist CRUD
