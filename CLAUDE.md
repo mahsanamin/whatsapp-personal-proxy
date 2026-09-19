@@ -8,6 +8,7 @@ linked to); every other machine drives it through the `wpp` CLI over REST.
 - `./proxy start|stop|restart|logs|status|test` manages the stack. `make` wraps it.
 - `./proxy init` creates `data/` and `.env`. Edit `.env` before the first start.
 - `docs/` — CLI, endpoints, architecture, configuration, project structure
+- `features/upcoming/` — self-contained feature briefs waiting to be implemented
 - `docs/ai_rules/` — conventions every code change must follow. **Read these first.**
 
 ## Architecture

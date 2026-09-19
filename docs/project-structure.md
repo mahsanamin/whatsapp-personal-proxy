@@ -9,6 +9,7 @@ whatsapp-personal-proxy/
 ├── docker-compose.yml          Production stack
 ├── docker-compose.override.yml Development overrides (hot reload)
 ├── .env.example                Committed template; .env is gitignored
+├── features/upcoming/          Self-contained briefs for features not implemented yet
 │
 ├── nginx/nginx.conf            Edge proxy: /api/* and /ws → server, /* → ui
 │
@@ -68,3 +69,4 @@ whatsapp-personal-proxy/
 | New CLI command | A subparser plus a branch in `run_api_command` in `wpp`, and a section in `docs/cli.md` |
 | WhatsApp protocol handling | `server/src/wa/client.js` |
 | Anything about JIDs | `server/src/util/jid.js` if pure, `server/src/db/lidmap.js` if it needs the database |
+| Planned feature brief | `features/upcoming/<feature>.md`; delete it only after implementation, tests, and permanent docs are complete |
