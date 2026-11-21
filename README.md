@@ -50,7 +50,7 @@ flowchart LR
 
 | Service     | Stack                                    | Port (internal) |
 |-------------|------------------------------------------|-----------------|
-| `wpp-server`| Node 20, Fastify, Baileys, better-sqlite3| 3901            |
+| `wpp-server`| Node 24, Fastify, Baileys, better-sqlite3| 3901            |
 | `wpp-ui`    | React 18, Vite, Tailwind                 | 5973            |
 | `wpp-nginx` | nginx:alpine                             | 80 → host 3900  |
 
