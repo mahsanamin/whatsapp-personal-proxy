@@ -5,7 +5,7 @@ import Connect from './pages/Connect'
 import Workspace from './pages/Workspace'
 import Tokens from './pages/Tokens'
 import Whitelist from './pages/Whitelist'
-import { api } from './api/client'
+import { api, UNAUTHORIZED_EVENT } from './api/client'
 
 export default function App() {
   const [authed, setAuthed] = useState(null) // null = loading
@@ -20,6 +20,12 @@ export default function App() {
     api('/tokens')
       .then(() => { setAuthed(true); return checkLink() })
       .catch(() => setAuthed(false))
+  }, [])
+
+  useEffect(() => {
+    const onUnauthorized = () => setAuthed(false)
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
   }, [])
 
   const handleLogin = () => { setAuthed(true); checkLink() }

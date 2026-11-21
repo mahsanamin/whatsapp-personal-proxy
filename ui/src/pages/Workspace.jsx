@@ -492,6 +492,24 @@ export default function Workspace({ onLogout }) {
     },
     onStatus: (data) => setWaStatus(data.status),
     onChannelUpdate: () => loadChannels(),
+    onReconnect: () => {
+      loadChannels()
+      api('/auth/wa/status').then(data => setWaStatus(data.status)).catch(() => {})
+      const jid = activeJidRef.current
+      if (!jid) return
+      // Merge rather than replace, so older pages the reader scrolled back to
+      // stay where they are.
+      api(`/channels/${encodeURIComponent(jid)}/messages?limit=${PAGE_SIZE}`)
+        .then(msgs => {
+          if (activeJidRef.current !== jid) return
+          setMessages(previous => {
+            const merged = new Map(previous.map(message => [message.id, message]))
+            for (const message of msgs) merged.set(message.id, message)
+            return [...merged.values()].sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+          })
+        })
+        .catch(() => {})
+    },
   })
 
   const loadChannels = useCallback(() => {
