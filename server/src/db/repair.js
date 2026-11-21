@@ -53,11 +53,12 @@ export async function repairUnknownMessages() {
     return { repaired: 0, error: err.message }
   }
 
-  // Albums are included, not just unknowns: a row converted by an earlier run
-  // keeps whatever label that run produced, so a corrected description would
-  // otherwise never reach the rows already migrated.
+  // Albums and contacts are included, not just unknowns: a row stored by an
+  // earlier run keeps whatever description that run produced, so a corrected
+  // one (an album label, a contact's phone number) would otherwise never reach
+  // the rows already stored.
   const rows = db.prepare(
-    "SELECT id, type, body, raw_json FROM messages WHERE type IN ('unknown', 'album') AND raw_json IS NOT NULL"
+    "SELECT id, type, body, raw_json FROM messages WHERE type IN ('unknown', 'album', 'contact') AND raw_json IS NOT NULL"
   ).all()
   if (rows.length === 0) return { repaired: 0, stillUnknown: 0 }
 

@@ -44,7 +44,7 @@ flowchart LR
 
 | Service | Stack | Listens |
 |---|---|---|
-| `wpp-server` | Node 20, Fastify, Baileys, better-sqlite3 | 3901 (container) |
+| `wpp-server` | Node 24, Fastify, Baileys, better-sqlite3 | 3901 (container) |
 | `wpp-ui` | React 18, Vite, Tailwind | 5973 (container) |
 | `wpp-nginx` | nginx:alpine | 80 → host `${BIND_HOST}:3900` |
 
@@ -109,7 +109,7 @@ Everything is under `./data/` on the host, bind-mounted into the containers:
 
 ```
 data/
-├── db/wpp.db        SQLite (messages, channel_meta, tokens, whitelist, tabs, lid_map)
+├── db/wpp.db        SQLite (messages, channel_meta, tokens, whitelist, tabs, lid_map, profile_pictures)
 ├── wa-session/      Baileys auth state — treat as a credential
 └── media/           Only files explicitly saved
 ```
@@ -123,6 +123,17 @@ the encrypted media key; the bytes are fetched from WhatsApp only when a caller 
 that specific message, and written to disk only via the explicit `.../media/save` route.
 This keeps the disk footprint of a busy account near zero.
 
+Profile pictures follow the same rule. `GET /api/channels/:jid/picture` asks WhatsApp
+only when the console actually displays an avatar, and the UI loads avatars lazily, so
+only rows on screen ask. The preview-size bytes (a few KB) go into `profile_pictures`
+for 24 hours, and so does "no picture visible", so privacy-hidden contacts are not queried
+on every render. A transient failure is retried after 10 minutes and keeps serving the
+previous picture meanwhile. When WhatsApp announces a picture change (`contacts.update`
+with `imgUrl`), the row is dropped right away, so the 24 hours only limits how long a
+missed announcement can leave an old picture showing. At most four picture queries run
+at once (`wa/pictures.js`). The client tries the canonical JID first, then the chat's
+other addresses from `expandJids()`.
+
 ## Event flow
 
 Baileys events land on a Node `EventEmitter` that the server decorates onto Fastify. Two
@@ -131,6 +142,14 @@ transports fan it out:
 - `/ws` — WebSocket, with per-chat and per-tab subscriptions. Used by the console.
 - `/api/events` — Server-Sent Events. Used by `wpp watch`, because SSE needs nothing
   beyond Python's standard library.
+
+### Auto-reply
+
+After a message is stored, `wa/autoreply.js` looks at it on its own queue, so it never
+slows ingestion. Only fresh `notify` messages from chats in the active rule set's scope
+get as far as a decision, and every decision is logged. The rules, limits and checks are
+pure functions in `util/autoreply.js`. Replies go out through `wa/send.js` like every
+other send. See [`autoreply.md`](autoreply.md).
 
 ### Contact-name confidence and repair
 

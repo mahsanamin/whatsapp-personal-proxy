@@ -36,6 +36,7 @@ Common codes: `BAD_INPUT`, `UNAUTHORIZED`, `INVALID_TOKEN`, `MISSING_SCOPE`, `NO
 | `channels:summarize` | Reserved for the LLM summary endpoint |
 | `tabs:manage` | Create, rename, and delete tabs |
 | `wa:admin` | Force reconnect and QR refresh |
+| `autoreply:manage` | Manage auto-reply rule sets, test them, read the decision log, mute contacts. Cannot put a rule set live or turn on the kill switch |
 
 ## Health and identity
 
@@ -85,6 +86,7 @@ so the CLI can route a send without a wasted round trip.
 |---|---|---|---|
 | `GET` | `/api/channels` | `channels:read` | Query: `type=dm\|group\|channel`, `search`, `tab`, `archived`, `limit` |
 | `GET` | `/api/channels/:jid` | `channels:read` | One chat's metadata |
+| `GET` | `/api/channels/:jid/picture` | `channels:read` | The chat's WhatsApp profile picture (preview size) as image bytes. People and groups only. Fetched on demand and cached server-side for 24h, including "no picture"; `404 NOT_FOUND` when none is visible, `503 WA_DISCONNECTED` when nothing is cached and WhatsApp is down, `502 WA_FETCH_FAILED` on a transient failure |
 | `GET` | `/api/groups` | `channels:read` | Groups from WhatsApp live, not the mirror. Requires an open link |
 | `GET` | `/api/channels/:jid/messages` | `channels:read` | Query: `limit` (max 200), `before`, `after`, `type`. Newest first. Reads across LID and phone-number JIDs |
 | `GET` | `/api/messages/search` | `channels:read` | Query: `q` (required), `jid`, `type`, `limit` |
@@ -112,7 +114,7 @@ were explicitly allowed.
 
 | Method | Path | Scope | Notes |
 |---|---|---|---|
-| `POST` | `/api/media/send` | depends on destination | Body is the **raw file bytes**; metadata goes in the query string: `to`, `kind`, `caption`, `filename`, `mimetype`, `voice`, `gif`, `reply_to`. Up to 100 MB |
+| `POST` | `/api/media/send` | depends on destination | Body is the **raw file bytes**; metadata goes in the query string: `to`, `kind`, `caption`, `filename`, `mimetype`, `voice`, `gif`, `reply_to`. Up to 100 MB. With `voice=true` the audio is re-encoded to Ogg/Opus with ffmpeg and sent with its duration and waveform; a file ffmpeg cannot read fails with `422 TRANSCODE_FAILED` |
 | `POST` | `/api/messages/:id/react` | destination-gated | `{ emoji }` — an empty emoji removes your reaction |
 | `POST` | `/api/messages/:id/edit` | destination-gated | `{ message }` — your own messages only |
 | `DELETE` | `/api/messages/:id` | destination-gated | Deletes for everyone; your own messages only |
@@ -137,6 +139,29 @@ bodies.
 | `GET` | `/api/whitelist` | `others:whitelist:read` |
 | `POST` | `/api/whitelist` | `others:whitelist:manage` — `{ jid, label? }`, accepts `+9715...` or a raw JID |
 | `DELETE` | `/api/whitelist/:id` | `others:whitelist:manage` |
+
+## Auto-reply
+
+Rule sets and their format are described in [`autoreply.md`](autoreply.md). Template
+errors come back as `400 BAD_INPUT` with the full list in `details: [{ path, message }]`.
+
+| Method | Path | Scope | Notes |
+|---|---|---|---|
+| `GET` | `/api/autoreply/settings` | `autoreply:manage` | `{ enabled, limits }` |
+| `PUT` | `/api/autoreply/settings` | session | `{ enabled }`. The global switch. Console only |
+| `GET` | `/api/autoreply/rulesets` | `autoreply:manage` | List, without templates |
+| `POST` | `/api/autoreply/rulesets` | `autoreply:manage` | `{ template }` as JSON text or an object. Starts inactive in `dry_run`. `201` |
+| `GET` | `/api/autoreply/rulesets/:id` | `autoreply:manage` | Includes `template` as stored text |
+| `GET` | `/api/autoreply/rulesets/:id/download` | `autoreply:manage` | The template as a `.json` attachment |
+| `PUT` | `/api/autoreply/rulesets/:id` | `autoreply:manage` | `{ template }`. A live rule set goes back to `dry_run` |
+| `PATCH` | `/api/autoreply/rulesets/:id` | `autoreply:manage` | `{ mode?, active? }`. Activating one deactivates the rest. Leaving a set active and `live` needs the console session, otherwise `403 MISSING_SCOPE` |
+| `DELETE` | `/api/autoreply/rulesets/:id` | `autoreply:manage` | The decision log is kept |
+| `POST` | `/api/autoreply/validate` | `autoreply:manage` | `{ template }` → `{ valid, errors, summary }` |
+| `POST` | `/api/autoreply/test` | `autoreply:manage` | `{ template \| ruleset_id, chat, text, type? }` → scope, matching rule, reply, and whether it would send now. Sends and logs nothing |
+| `GET` | `/api/autoreply/decisions` | `autoreply:manage` | `?limit=` (max 500) `&ruleset_id=` |
+| `GET` | `/api/autoreply/contacts` | `autoreply:manage` | Per-contact replies, conversation count, mute state |
+| `POST` | `/api/autoreply/contacts/:jid/mute` | `autoreply:manage` | `{ minutes? }`, default 1440 |
+| `DELETE` | `/api/autoreply/contacts/:jid/mute` | `autoreply:manage` | `:jid` may be `<group>\|<sender>` for a sender muted inside a group |
 
 ## Organisation
 

@@ -50,7 +50,7 @@ flowchart LR
 
 | Service     | Stack                                    | Port (internal) |
 |-------------|------------------------------------------|-----------------|
-| `wpp-server`| Node 20, Fastify, Baileys, better-sqlite3| 3901            |
+| `wpp-server`| Node 24, Fastify, Baileys, better-sqlite3| 3901            |
 | `wpp-ui`    | React 18, Vite, Tailwind                 | 5973            |
 | `wpp-nginx` | nginx:alpine                             | 80 → host 3900  |
 
@@ -202,6 +202,7 @@ more scopes; the API rejects calls outside the granted scopes.
 | `channels:summarize`        | (Reserved for the LLM-summary endpoint)                  |
 | `tabs:manage`               | Create/rename/delete tabs                                |
 | `wa:admin`                  | Force-reconnect, refresh QR (used by `wpp` CLI)          |
+| `autoreply:manage`          | Manage auto-reply rule sets; only the console sets live  |
 
 Tokens are SHA-256 hashed at rest and shown to you exactly once at creation.
 

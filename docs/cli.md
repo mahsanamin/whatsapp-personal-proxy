@@ -146,13 +146,13 @@ How WhatsApp presents the file is taken from its type; `--kind` overrides that
 (`image`, `video`, `audio`, `document`, `sticker`).
 
 `--voice` is its own flag because WhatsApp treats a voice note and an audio
-file as different things: a voice note shows a waveform and plays inline. It
-wants **Opus in an Ogg container** — other codecs upload, but some clients will
-not play them inline. To convert:
+file as different things: a voice note shows a waveform and plays inline.
+Phones only play **Opus in an Ogg container** inline, so the server re-encodes
+any `--voice` upload (m4a, mp3, webm, ogg) to that format with ffmpeg and works
+out the duration and waveform itself. Send whatever audio file you have:
 
 ```bash
-ffmpeg -i input.m4a -c:a libopus -b:a 32k note.ogg
-wpp send "Family" --file note.ogg --voice --yes
+wpp send "Family" --file input.m4a --voice --yes
 ```
 
 Documents up to 100 MB; other media follows WhatsApp's own ~16 MB ceiling.

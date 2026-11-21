@@ -1,8 +1,11 @@
+import { generateWAMessage, generateMessageIDV2 } from '@whiskeysockets/baileys'
 import { requireAnyCredential } from '../middleware/token.js'
 import { loadRawMessage } from '../util/messageRef.js'
 import { refuseIfNotAllowed } from '../util/sendPermission.js'
 import { toJid, isGroup } from '../util/jid.js'
 import { ensureConnected, recordSentMessage } from '../wa/client.js'
+import { prepareVoiceNote } from '../util/voiceNote.js'
+import { sendMessage } from '../wa/send.js'
 import { config } from '../config.js'
 
 // WhatsApp's own ceiling is ~16MB for inline media and ~100MB for documents.
@@ -21,23 +24,17 @@ function kindFromMime(mime = '') {
 /**
  * Build the Baileys content for one upload.
  *
- * A voice note is an audio message with ptt set; WhatsApp renders it as a
- * waveform with a play button rather than an attached file. It wants
- * Opus-in-Ogg — other codecs upload but some clients will not play them
- * inline, so the mime type is passed through rather than guessed at.
+ * Voice notes do not come through here: they are re-encoded to Ogg/Opus and
+ * sent by sendVoiceNote, because phones will not play other codecs inline.
  */
-function buildContent({ kind, buffer, mimetype, filename, caption, voice, gif }) {
+function buildContent({ kind, buffer, mimetype, filename, caption, gif }) {
   switch (kind) {
     case 'image':
       return { image: buffer, mimetype, ...(caption ? { caption } : {}) }
     case 'video':
       return { video: buffer, mimetype, ...(caption ? { caption } : {}), ...(gif ? { gifPlayback: true } : {}) }
     case 'audio':
-      return {
-        audio: buffer,
-        mimetype: mimetype || (voice ? 'audio/ogg; codecs=opus' : 'audio/mpeg'),
-        ptt: Boolean(voice),
-      }
+      return { audio: buffer, mimetype: mimetype || 'audio/mpeg' }
     case 'sticker':
       return { sticker: buffer }
     default:
@@ -48,6 +45,38 @@ function buildContent({ kind, buffer, mimetype, filename, caption, voice, gif })
         ...(caption ? { caption } : {}),
       }
   }
+}
+
+/**
+ * Send a prepared voice note with its waveform.
+ *
+ * sock.sendMessage cannot do this: for every ptt audio Baileys computes the
+ * waveform itself through an optional decoder package we do not install, and on
+ * failure it writes undefined over whatever waveform the caller passed. The
+ * phone then draws a flat line. So build the message the way sendMessage does,
+ * put the waveform back, and relay it.
+ */
+async function sendVoiceNote(sock, jid, note, options) {
+  const msg = await generateWAMessage(jid, {
+    audio: note.audio,
+    mimetype: note.mimetype,
+    ptt: true,
+    seconds: note.seconds,
+  }, {
+    userJid: sock.user.id,
+    upload: sock.waUploadToServer,
+    messageId: generateMessageIDV2(sock.user?.id),
+    ...options,
+  })
+  msg.message.audioMessage.waveform = note.waveform
+  await sock.relayMessage(jid, msg.message, { messageId: msg.key.id })
+  // sendMessage emits our own message so the console sees the echo; keep that.
+  // upsertMessage is a Baileys buffered function: it switches event buffering
+  // on and leaves flushing to the socket's own processing loop. Called from
+  // here, outside that loop, it would hold messages.upsert and every other
+  // bufferable event until some unrelated incoming message flushed them.
+  sock.upsertMessage(msg, 'append').catch(() => {}).finally(() => sock.ev.flush())
+  return msg
 }
 
 export default async function mediaRoutes(fastify) {
@@ -105,13 +134,25 @@ export default async function mediaRoutes(fastify) {
       return reply.code(503).send({ error: 'WhatsApp not connected', code: 'WA_DISCONNECTED' })
     }
 
-    const content = buildContent({
+    let voiceNote = null
+    if (isVoice) {
+      try {
+        voiceNote = await prepareVoiceNote(buffer)
+      } catch (err) {
+        request.log.warn({ err }, 'voice note transcode failed')
+        return reply.code(422).send({
+          error: `Could not convert the recording to a voice note: ${err.message}`,
+          code: 'TRANSCODE_FAILED',
+        })
+      }
+    }
+
+    const content = voiceNote ? null : buildContent({
       kind,
       buffer,
       mimetype,
       filename,
       caption,
-      voice: isVoice,
       gif: gif === 'true' || gif === '1',
     })
 
@@ -125,16 +166,18 @@ export default async function mediaRoutes(fastify) {
     }
 
     try {
-      const result = await sock.sendMessage(jid, content, options)
+      const result = voiceNote
+        ? await sendVoiceNote(sock, jid, voiceNote, options)
+        : await sendMessage(sock, jid, content, options)
       recordSentMessage(result)
       return {
         ok: true,
         messageId: result.key.id,
         to: jid,
         kind,
-        bytes: buffer.length,
-        mimetype,
-        ...(isVoice ? { voice_note: true } : {}),
+        bytes: voiceNote ? voiceNote.audio.length : buffer.length,
+        mimetype: voiceNote ? voiceNote.mimetype : mimetype,
+        ...(voiceNote ? { voice_note: true, seconds: voiceNote.seconds } : {}),
       }
     } catch (err) {
       request.log.error({ err }, 'media send failed')

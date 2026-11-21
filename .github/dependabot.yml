@@ -1,0 +1,46 @@
+# Weekly dependency updates. Minor and patch updates are grouped into one PR per
+# ecosystem; a major update always gets its own PR so it can be read on its own.
+#
+# Stable releases only. Dependabot does not offer a pre-release (-rc, -beta, ...)
+# when the version in use is stable, so Baileys, whose npm `latest` tag points at
+# 7.0.0-rc14, is offered 6.7.x patches and nothing from the 7.0.0 release
+# candidates. A stable 7.0.0 would arrive as its own major PR.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directories:
+      - /server
+      - /ui
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # 6.17.16 was published by mistake in 2025-03, is deprecated, and has a
+      # message-spoofing vulnerability (GHSA-qvv5-jq5g-4cgg). To semver it is newer
+      # than 6.7.x, so without this rule it would be offered as a minor update.
+      # package.json also pins Baileys to ~6.7.x for the same reason.
+      - dependency-name: "@whiskeysockets/baileys"
+        versions: [">=6.8.0 <7.0.0"]
+
+  - package-ecosystem: docker
+    directories:
+      - /server
+      - /ui
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      docker-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]

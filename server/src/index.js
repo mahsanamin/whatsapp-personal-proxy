@@ -12,6 +12,7 @@ import { DEFAULT_SESSION_MS } from './util/remember.js'
 import { repairMessageTimestamps, repairUnknownMessages } from './db/repair.js'
 import { requireSession } from './middleware/session.js'
 import { createWAClient } from './wa/client.js'
+import { sendMessage } from './wa/send.js'
 
 // Route imports
 import authRoutes from './api/auth.js'
@@ -28,6 +29,7 @@ import eventRoutes from './api/events.js'
 import briefRoutes from './api/brief.js'
 import mediaRoutes from './api/media.js'
 import actionRoutes from './api/actions.js'
+import autoreplyRoutes from './api/autoreply.js'
 import wsRoutes from './ws/index.js'
 
 const fastify = Fastify({
@@ -116,6 +118,7 @@ await fastify.register(eventRoutes)
 await fastify.register(briefRoutes)
 await fastify.register(mediaRoutes)
 await fastify.register(actionRoutes)
+await fastify.register(autoreplyRoutes)
 await fastify.register(wsRoutes)
 
 // Force resolve unnamed contacts and groups.
@@ -203,7 +206,7 @@ fastify.post('/send', {
   if (!sock) {
     return reply.code(503).send({ error: 'WhatsApp not connected', code: 'WA_DISCONNECTED' })
   }
-  const result = await sock.sendMessage(jid, { text: message })
+  const result = await sendMessage(sock, jid, { text: message })
   return { ok: true, messageId: result.key.id }
 })
 

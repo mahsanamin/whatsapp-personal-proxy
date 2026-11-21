@@ -1001,7 +1001,7 @@ def build_parser():
     p.add_argument("--file", help="Send this file instead of text")
     p.add_argument("--caption", help="Caption for an image, video, or document")
     p.add_argument("--voice", action="store_true",
-                   help="Send audio as a WhatsApp voice note (Opus/Ogg plays inline everywhere)")
+                   help="Send audio as a WhatsApp voice note (any audio format, the server converts it)")
     p.add_argument("--gif", action="store_true", help="Play a short video as a looping GIF")
     p.add_argument("--kind", choices=("image", "video", "audio", "document", "sticker"),
                    help="Override how WhatsApp presents the file (default: from its type)")

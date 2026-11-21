@@ -6,6 +6,8 @@ import { canonicalJid, canonicalJidMap, expandJids, resolveNames } from '../db/l
 import { unreadState, unreadMentions, markUnreadThrough } from '../db/unread.js'
 import { saveContactName } from '../db/contactNames.js'
 import { loadMessageKey } from '../util/messageRef.js'
+import { getProfilePicture } from '../wa/pictures.js'
+import { isPictureJid } from '../util/profilePicture.js'
 
 export default async function channelRoutes(fastify) {
   fastify.get('/channels', {
@@ -198,6 +200,42 @@ export default async function channelRoutes(fastify) {
       alt_jids: jids.filter(alias => alias !== jid),
       last_message: lastMessage || null,
     }
+  })
+
+  // The chat's WhatsApp profile picture, served from our own cache. The raw
+  // pps.whatsapp.net URL expires, so the console never sees it. Fetched only
+  // when something displays it, never in bulk.
+  fastify.get('/channels/:jid/picture', {
+    preHandler: requireScope('channels:read'),
+  }, async (request, reply) => {
+    // A device suffix (number:3@...) names the same person as the bare JID.
+    const jid = toJid(request.params.jid)?.replace(/:\d+@/, '@')
+    if (!isPictureJid(jid)) {
+      return reply.code(400).send({ error: 'A person or group JID, or a phone number, is required', code: 'BAD_INPUT' })
+    }
+
+    const row = await getProfilePicture(ensureConnected(), jid)
+
+    // The browser may reuse an answer for an hour; the server cache holds it
+    // for a day and is cleared early when WhatsApp announces a change.
+    reply.header('Cache-Control', 'private, max-age=3600')
+
+    if (row?.image && row.mime) {
+      return reply
+        .header('X-Content-Type-Options', 'nosniff')
+        .type(row.mime)
+        .send(row.image)
+    }
+    if (row?.status === 'none') {
+      return reply.code(404).send({ error: 'No profile picture visible for this chat', code: 'NOT_FOUND' })
+    }
+
+    // Nothing cached and nothing new: do not let the browser cache a miss.
+    reply.header('Cache-Control', 'no-store')
+    if (!row) {
+      return reply.code(503).send({ error: 'WhatsApp not connected', code: 'WA_DISCONNECTED' })
+    }
+    return reply.code(502).send({ error: 'Could not fetch the profile picture from WhatsApp', code: 'WA_FETCH_FAILED' })
   })
 
   // A console read complements the read updates received from WhatsApp.
