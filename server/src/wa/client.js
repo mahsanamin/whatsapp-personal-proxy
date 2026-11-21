@@ -16,6 +16,7 @@ import { saveContactName, repairContactNames } from '../db/contactNames.js'
 import { applyUnreadUpdate, unreadState, recordUnreadMessage, applyUnreadReceipt } from '../db/unread.js'
 import { incomingContact } from '../util/contactIdentity.js'
 import { jidUser } from '../util/jid.js'
+import { describeContacts } from '../util/vcard.js'
 
 const MAX_RETRIES = 10
 let retries = 0
@@ -579,8 +580,7 @@ export function normalizeMessage(raw) {
       (loc.degreesLatitude != null ? `${loc.degreesLatitude}, ${loc.degreesLongitude}` : null)
   } else if (msg.contactMessage || msg.contactsArrayMessage) {
     type = 'contact'
-    body = msg.contactMessage?.displayName ||
-      (msg.contactsArrayMessage?.contacts || []).map(c => c.displayName).filter(Boolean).join(', ') || null
+    body = describeContacts(msg.contactMessage ? [msg.contactMessage] : msg.contactsArrayMessage?.contacts)
   } else if (msg.reactionMessage) {
     type = 'reaction'
     body = msg.reactionMessage.text
