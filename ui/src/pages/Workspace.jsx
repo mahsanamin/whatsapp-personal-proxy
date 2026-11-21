@@ -472,6 +472,10 @@ export default function Workspace({ onLogout }) {
   // Prepending older messages must not yank the view to the bottom, and must
   // keep the reader looking at the same message they were already reading.
   const pendingScrollRestore = useRef(null)
+  // Whether the reader is at the newest message. While true, anything that
+  // grows the pane (a new message, an image finishing loading) keeps them
+  // there; once they scroll up to read, nothing yanks them back down.
+  const pinnedToBottom = useRef(true)
   const inputRef = useRef(null)
 
   // One conversation can be addressed two ways, so an arriving message may
@@ -563,6 +567,7 @@ export default function Workspace({ onLogout }) {
     const controller = new AbortController()
     setOlderState({ loading: false, exhausted: false })
     pendingScrollRestore.current = null
+    pinnedToBottom.current = true
     api(`/channels/${encodeURIComponent(activeJid)}/messages?limit=${PAGE_SIZE}`, { signal: controller.signal })
       .then(msgs => {
         if (!active) return
@@ -663,8 +668,18 @@ export default function Workspace({ onLogout }) {
       pendingScrollRestore.current = null
       return
     }
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    // Your own message always brings you down to it, as WhatsApp does.
+    if (messages[messages.length - 1]?.is_from_me) pinnedToBottom.current = true
+    // Jump, do not animate: a smooth scroll starts from the top of a freshly
+    // opened chat, passes the "near the top" trigger on its way down, and loads
+    // an older page that then holds the view halfway up the conversation.
+    if (pinnedToBottom.current && pane) pane.scrollTop = pane.scrollHeight
   }, [messages])
+
+  const keepPinned = () => {
+    const pane = messagePaneRef.current
+    if (pinnedToBottom.current && pane) pane.scrollTop = pane.scrollHeight
+  }
 
   useEffect(() => {
     if (activeJid && inputRef.current) inputRef.current.focus()
@@ -903,7 +918,15 @@ export default function Workspace({ onLogout }) {
               {/* Messages */}
               <div
                 ref={messagePaneRef}
-                onScroll={(e) => { if (e.currentTarget.scrollTop < 120) loadOlder() }}
+                onScroll={(e) => {
+                  const pane = e.currentTarget
+                  pinnedToBottom.current = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 80
+                  if (pane.scrollTop < 120) loadOlder()
+                }}
+                // Images and videos arrive after the jump to the bottom and push
+                // the newest message out of view unless the pane follows them.
+                onLoadCapture={keepPinned}
+                onLoadedMetadataCapture={keepPinned}
                 className="flex-1 overflow-y-auto px-5 py-3"
               >
                 {!olderState.exhausted && (
