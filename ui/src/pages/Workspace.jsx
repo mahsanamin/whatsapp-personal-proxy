@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { useConversationRead } from '../hooks/useConversationRead'
 import { useWebSocket } from '../ws/useWebSocket'
+import { useVoiceRecorder, voiceRecordingSupported, formatElapsed } from '../hooks/useVoiceRecorder'
 
 function formatJid(jid) {
   if (jid.endsWith('@s.whatsapp.net')) return '+' + jid.replace('@s.whatsapp.net', '')
@@ -101,8 +102,10 @@ function MediaBlock({ msg, label }) {
       setReason('could not reach the server')
     }
   }
-  const src = `/api/channels/${encodeURIComponent(msg.jid)}/messages/${msg.id}/media`
-  const srcWithRetry = retryKey > 0 ? `${src}?t=${retryKey}` : src
+  // A voice note we just recorded plays from the browser's copy: while it is
+  // sending there is nothing on the server to fetch yet.
+  const src = msg.localUrl || `/api/channels/${encodeURIComponent(msg.jid)}/messages/${msg.id}/media`
+  const srcWithRetry = retryKey > 0 && !msg.localUrl ? `${src}?t=${retryKey}` : src
   const size = msg.media_size > 0 ? `${(msg.media_size / 1024).toFixed(0)} KB` : null
 
   if (hasError) {
@@ -167,7 +170,7 @@ function MediaBlock({ msg, label }) {
           className="w-full h-9"
         />
         <span className="text-[10px] text-neutral-500">
-          {msg.type === 'voice' ? 'Voice note' : 'Audio'}{size ? ` · ${size}` : ''}
+          {msg.pending ? 'Sending voice note…' : msg.type === 'voice' ? 'Voice note' : 'Audio'}{size ? ` · ${size}` : ''}
         </span>
       </div>
     )
@@ -462,6 +465,7 @@ export default function Workspace({ onLogout }) {
   const [syncNote, setSyncNote] = useState(null)
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef(null)
+  const voice = useVoiceRecorder()
   const [search, setSearch] = useState('')
   const [sendError, setSendError] = useState(null)
   const [syncStats, setSyncStats] = useState({ channels: 0, messages: 0 })
@@ -678,23 +682,89 @@ export default function Workspace({ onLogout }) {
 
     try {
       const res = await api('/send', { method: 'POST', body: { jid: activeJid, message: text } })
-      setMessages(prev => {
-        // The echo can beat the HTTP response; if it already arrived, the
-        // placeholder is simply redundant.
-        if (res.messageId && prev.some(m => m.id === res.messageId)) {
-          return prev.filter(m => m.id !== tempId)
-        }
-        return prev.map(m => (
-          m.id === tempId ? { ...m, id: res.messageId || m.id, pending: false } : m
-        ))
-      })
+      adoptSentId(tempId, res.messageId)
     } catch (err) {
-      // Nothing was sent, so stop showing it as though it had been.
-      setMessages(prev => prev.filter(m => m.id !== tempId))
-      setSendError(err.message)
+      dropPending(tempId, err)
+    }
+  }
+
+  const adoptSentId = (tempId, messageId) => {
+    setMessages(prev => {
+      // The echo can beat the HTTP response; if it already arrived, the
+      // placeholder is simply redundant.
+      if (messageId && prev.some(m => m.id === messageId)) {
+        return prev.filter(m => m.id !== tempId)
+      }
+      return prev.map(m => (
+        m.id === tempId ? { ...m, id: messageId || m.id, pending: false } : m
+      ))
+    })
+  }
+
+  // Nothing was sent, so stop showing it as though it had been.
+  const dropPending = (tempId, err) => {
+    setMessages(prev => {
+      const dropped = prev.find(m => m.id === tempId)
+      if (dropped?.localUrl) URL.revokeObjectURL(dropped.localUrl)
+      return prev.filter(m => m.id !== tempId)
+    })
+    setSendError(err.message)
+    setTimeout(() => setSendError(null), 5000)
+  }
+
+  const handleVoiceStart = async () => {
+    setSendError(null)
+    try {
+      await voice.start()
+    } catch (err) {
+      setSendError(err.name === 'NotAllowedError'
+        ? 'Microphone access is blocked. Allow it in the browser\'s site settings.'
+        : `Could not start recording: ${err.message}`)
       setTimeout(() => setSendError(null), 5000)
     }
   }
+
+  // Same placeholder-then-adopt pattern as text. The server converts whatever
+  // the browser recorded (webm, ogg or mp4) into the Ogg/Opus voice note
+  // phones expect, so the recording is sent as it is.
+  const handleVoiceSend = async () => {
+    const jid = activeJid
+    const blob = await voice.stop()
+    if (!blob || !jid) return
+    setSendError(null)
+
+    const tempId = `pending-${Date.now()}`
+    setMessages(prev => [...prev, {
+      id: tempId,
+      jid,
+      from_jid: 'me',
+      body: null,
+      type: 'voice',
+      timestamp: new Date().toISOString(),
+      is_from_me: 1,
+      reactions: [],
+      pending: true,
+      localUrl: URL.createObjectURL(blob),
+    }])
+
+    try {
+      const params = new URLSearchParams({ to: jid, voice: 'true', mimetype: blob.type })
+      const res = await fetch(`/api/media/send?${params}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: blob,
+      })
+      const data = await res.json().catch(() => ({ error: res.statusText }))
+      if (!res.ok) throw new Error(data.error || 'Voice note failed to send')
+      adoptSentId(tempId, data.messageId)
+    } catch (err) {
+      dropPending(tempId, err)
+    }
+  }
+
+  // Switching chats mid-recording would send the note to the wrong person.
+  useEffect(() => { voice.cancel() }, [activeJid, voice.cancel])
 
   // Upload straight to /media/send as raw bytes; the server takes the metadata
   // from the query string, so there is no multipart handling on either side.
@@ -945,46 +1015,90 @@ export default function Workspace({ onLogout }) {
                 {sendError && (
                   <div className="px-5 py-1.5 text-xs text-red-400 bg-red-950/30">{sendError}</div>
                 )}
-                <form onSubmit={handleSend} className="px-5 py-3 flex items-center gap-3">
-                  <input
-                    ref={fileRef}
-                    type="file"
-                    className="hidden"
-                    onChange={(e) => handleAttach(e.target.files?.[0])}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => fileRef.current?.click()}
-                    disabled={uploading}
-                    title="Attach a photo, video, audio file or document"
-                    className="text-neutral-500 hover:text-accent disabled:opacity-40 transition-colors flex-shrink-0"
-                  >
-                    {uploading ? (
-                      <span className="text-xs">Sending…</span>
-                    ) : (
+                {voice.recording ? (
+                  <div className="px-5 py-3 flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={voice.cancel}
+                      title="Discard the recording"
+                      aria-label="Discard the recording"
+                      className="text-neutral-500 hover:text-red-400 transition-colors flex-shrink-0"
+                    >
                       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8}
-                          d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3M4 7h16" />
                       </svg>
+                    </button>
+                    <div className="flex-1 flex items-center gap-2.5 bg-neutral-800/60 rounded-xl px-4 py-2.5">
+                      <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                      <span className="font-mono text-sm text-neutral-200 tabular-nums">{formatElapsed(voice.elapsed)}</span>
+                      <span className="text-xs text-neutral-500">Recording voice note…</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleVoiceSend}
+                      className="bg-accent hover:bg-emerald-400 text-black rounded-xl px-5 py-2.5 text-sm font-semibold transition-all"
+                    >
+                      Send
+                    </button>
+                  </div>
+                ) : (
+                  <form onSubmit={handleSend} className="px-5 py-3 flex items-center gap-3">
+                    <input
+                      ref={fileRef}
+                      type="file"
+                      className="hidden"
+                      onChange={(e) => handleAttach(e.target.files?.[0])}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fileRef.current?.click()}
+                      disabled={uploading}
+                      title="Attach a photo, video, audio file or document"
+                      className="text-neutral-500 hover:text-accent disabled:opacity-40 transition-colors flex-shrink-0"
+                    >
+                      {uploading ? (
+                        <span className="text-xs">Sending…</span>
+                      ) : (
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8}
+                            d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                        </svg>
+                      )}
+                    </button>
+                    {voiceRecordingSupported && (
+                      <button
+                        type="button"
+                        onClick={handleVoiceStart}
+                        disabled={uploading}
+                        title="Record a voice note"
+                        aria-label="Record a voice note"
+                        className="text-neutral-500 hover:text-accent disabled:opacity-40 transition-colors flex-shrink-0"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8}
+                            d="M12 15a3 3 0 003-3V6a3 3 0 10-6 0v6a3 3 0 003 3zm6-3a6 6 0 01-12 0m6 6v3m-3 0h6" />
+                        </svg>
+                      </button>
                     )}
-                  </button>
-                  <input
-                    ref={inputRef}
-                    type="text"
-                    value={msgInput}
-                    onChange={(e) => setMsgInput(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) handleSend(e) }}
-                    placeholder="Type a message..."
-                    className="flex-1 bg-neutral-800/60 rounded-xl px-4 py-2.5 text-sm text-white placeholder-neutral-500 outline-none focus:ring-1 focus:ring-accent/50 transition-all"
-                  />
-                  <button
-                    type="submit"
-                    disabled={!msgInput.trim()}
-                    className="bg-accent hover:bg-emerald-400 disabled:opacity-30 disabled:hover:bg-accent text-black rounded-xl px-5 py-2.5 text-sm font-semibold transition-all"
-                  >
-                    Send
-                  </button>
-                </form>
+                    <input
+                      ref={inputRef}
+                      type="text"
+                      value={msgInput}
+                      onChange={(e) => setMsgInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) handleSend(e) }}
+                      placeholder="Type a message..."
+                      className="flex-1 bg-neutral-800/60 rounded-xl px-4 py-2.5 text-sm text-white placeholder-neutral-500 outline-none focus:ring-1 focus:ring-accent/50 transition-all"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!msgInput.trim()}
+                      className="bg-accent hover:bg-emerald-400 disabled:opacity-30 disabled:hover:bg-accent text-black rounded-xl px-5 py-2.5 text-sm font-semibold transition-all"
+                    >
+                      Send
+                    </button>
+                  </form>
+                )}
               </div>
             </>
           ) : (
