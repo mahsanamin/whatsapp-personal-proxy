@@ -16,10 +16,12 @@ import { saveContactName, repairContactNames } from '../db/contactNames.js'
 import { applyUnreadUpdate, unreadState, recordUnreadMessage, applyUnreadReceipt } from '../db/unread.js'
 import { incomingContact } from '../util/contactIdentity.js'
 import { jidUser } from '../util/jid.js'
+import { createConnectionGate } from '../util/connectionGate.js'
 
 const MAX_RETRIES = 10
 let retries = 0
 let currentSock = null
+const connectionGate = createConnectionGate()
 let sessionDir = config.waSessionPath
 let linkedCache = null
 let linkedPhoneNumber = null
@@ -78,6 +80,10 @@ function mentionsMe(message) {
 const logger = pino({ level: config.waLogLevel })
 
 export async function createWAClient(sessionPath, eventBus) {
+  // Supersede any earlier attempt and its pending retry, so the socket ended
+  // below cannot schedule a reconnect that replaces the one created here.
+  const attempt = connectionGate.begin()
+
   // Close existing socket to prevent duplicate listeners
   if (currentSock) {
     try { currentSock.end() } catch (_) {}
@@ -90,6 +96,9 @@ export async function createWAClient(sessionPath, eventBus) {
   rememberMyJids(state.creds)
 
   const { version } = await fetchLatestBaileysVersion()
+
+  // Another attempt started while this one was awaiting; let that one win.
+  if (!connectionGate.isCurrent(attempt)) return
 
   const sock = makeWASocket({
     version,
@@ -129,6 +138,10 @@ export async function createWAClient(sessionPath, eventBus) {
   })
 
   sock.ev.on('connection.update', async (update) => {
+    // Events from a socket that has been replaced describe a connection nobody
+    // uses any more: its QR is unscannable and its close was intentional.
+    if (!connectionGate.isCurrent(attempt)) return
+
     const { connection, lastDisconnect, qr } = update
 
     if (qr) {
@@ -222,7 +235,7 @@ export async function createWAClient(sessionPath, eventBus) {
       if (retries < MAX_RETRIES) {
         const delay = Math.min(1000 * Math.pow(2, retries), 60_000)
         retries++
-        setTimeout(() => createWAClient(sessionPath, eventBus), delay)
+        connectionGate.retryLater(attempt, delay, () => createWAClient(sessionPath, eventBus))
       } else {
         eventBus.emit('wa.failed', { message: 'Max reconnect attempts reached' })
       }
