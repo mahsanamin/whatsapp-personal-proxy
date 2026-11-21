@@ -139,6 +139,29 @@ bodies.
 | `POST` | `/api/whitelist` | `others:whitelist:manage` — `{ jid, label? }`, accepts `+9715...` or a raw JID |
 | `DELETE` | `/api/whitelist/:id` | `others:whitelist:manage` |
 
+## Auto-reply
+
+Rule sets and their format are described in [`autoreply.md`](autoreply.md). Template
+errors come back as `400 BAD_INPUT` with the full list in `details: [{ path, message }]`.
+
+| Method | Path | Scope | Notes |
+|---|---|---|---|
+| `GET` | `/api/autoreply/settings` | `autoreply:manage` | `{ enabled, limits }` |
+| `PUT` | `/api/autoreply/settings` | session | `{ enabled }`. The global switch. Console only |
+| `GET` | `/api/autoreply/rulesets` | `autoreply:manage` | List, without templates |
+| `POST` | `/api/autoreply/rulesets` | `autoreply:manage` | `{ template }` as JSON text or an object. Starts inactive in `dry_run`. `201` |
+| `GET` | `/api/autoreply/rulesets/:id` | `autoreply:manage` | Includes `template` as stored text |
+| `GET` | `/api/autoreply/rulesets/:id/download` | `autoreply:manage` | The template as a `.json` attachment |
+| `PUT` | `/api/autoreply/rulesets/:id` | `autoreply:manage` | `{ template }`. A live rule set goes back to `dry_run` |
+| `PATCH` | `/api/autoreply/rulesets/:id` | `autoreply:manage` | `{ mode?, active? }`. Activating one deactivates the rest. Leaving a set active and `live` needs the console session, otherwise `403 MISSING_SCOPE` |
+| `DELETE` | `/api/autoreply/rulesets/:id` | `autoreply:manage` | The decision log is kept |
+| `POST` | `/api/autoreply/validate` | `autoreply:manage` | `{ template }` → `{ valid, errors, summary }` |
+| `POST` | `/api/autoreply/test` | `autoreply:manage` | `{ template \| ruleset_id, chat, text, type? }` → scope, matching rule, reply, and whether it would send now. Sends and logs nothing |
+| `GET` | `/api/autoreply/decisions` | `autoreply:manage` | `?limit=` (max 500) `&ruleset_id=` |
+| `GET` | `/api/autoreply/contacts` | `autoreply:manage` | Per-contact replies, conversation count, mute state |
+| `POST` | `/api/autoreply/contacts/:jid/mute` | `autoreply:manage` | `{ minutes? }`, default 1440 |
+| `DELETE` | `/api/autoreply/contacts/:jid/mute` | `autoreply:manage` | `:jid` may be `<group>\|<sender>` for a sender muted inside a group |
+
 ## Organisation
 
 | Method | Path | Scope |

@@ -21,10 +21,13 @@ whatsapp-personal-proxy/
 │   │   ├── db/
 │   │   │   ├── index.js        better-sqlite3 handle and pragmas
 │   │   │   ├── migrations.js   Schema, idempotent
-│   │   │   └── lidmap.js       LID ⇄ phone-number JID expansion
+│   │   │   ├── lidmap.js       LID ⇄ phone-number JID expansion
+│   │   │   └── autoreply.js    Auto-reply rule sets, decision log, contact state
 │   │   ├── wa/
 │   │   │   ├── client.js       Baileys socket, event ingestion, name resolution
-│   │   │   └── media.js        On-demand media download. Never automatic
+│   │   │   ├── media.js        On-demand media download. Never automatic
+│   │   │   ├── send.js         Every send goes through here (flushes Baileys' event buffer)
+│   │   │   └── autoreply.js    Runs the active rule set on incoming messages
 │   │   ├── api/                One file per resource, each a Fastify plugin
 │   │   │   ├── auth.js         Console login, /auth/test, QR endpoints
 │   │   │   ├── tokens.js       API token CRUD (console session only)
@@ -36,12 +39,16 @@ whatsapp-personal-proxy/
 │   │   │   ├── others.js       Sends to whitelisted numbers
 │   │   │   ├── groups.js       Sends to groups
 │   │   │   ├── whitelist.js    Whitelist CRUD
+│   │   │   ├── autoreply.js    Auto-reply rule sets, test, decision log
 │   │   │   └── tabs.js         Console tab CRUD
 │   │   ├── ws/index.js         WebSocket for the console
 │   │   ├── middleware/
 │   │   │   ├── session.js      Console session guard
 │   │   │   └── token.js        Bearer tokens, scopes, caller identification
-│   │   └── util/jid.js         Pure JID helpers (no DB import — testable anywhere)
+│   │   └── util/
+│   │       ├── jid.js          Pure JID helpers (no DB import, testable anywhere)
+│   │       └── autoreply.js    Pure auto-reply logic: validation, matching, limits
+│   ├── templates/autoreply/    Example auto-reply rule sets
 │   └── tests/                  node:test, no framework
 │
 ├── ui/                         React 18 + Vite + Tailwind
@@ -49,6 +56,7 @@ whatsapp-personal-proxy/
 │       ├── Login.jsx           Console sign-in
 │       ├── Connect.jsx         QR code — the only place WhatsApp gets linked
 │       ├── Workspace.jsx       Tabs, chat list, message view, manual send
+│       ├── AutoReply.jsx       Auto-reply rule sets, test box, contacts, decision log
 │       └── Tokens.jsx          API keys and the CLI install command
 │
 ├── tests/cli/test_wpp.py       CLI tests, standard library unittest
@@ -57,6 +65,7 @@ whatsapp-personal-proxy/
     ├── endpoints.md            Every route, its auth, and its scope
     ├── architecture.md         How the pieces fit, and the LID/PN quirk
     ├── configuration.md        Every .env knob
+    ├── autoreply.md            Auto-reply rule-set format and safety rules
     └── ai_rules/               Conventions any change must follow
 ```
 
@@ -68,5 +77,7 @@ whatsapp-personal-proxy/
 | New scope | `VALID_SCOPES` in `middleware/token.js`, the console picker, `docs/endpoints.md`, and the test in `server/tests/scopes.test.js` |
 | New CLI command | A subparser plus a branch in `run_api_command` in `wpp`, and a section in `docs/cli.md` |
 | WhatsApp protocol handling | `server/src/wa/client.js` |
+| Sending a message | `sendMessage()` in `server/src/wa/send.js`, never `sock.sendMessage` directly |
+| Auto-reply behavior | `server/src/util/autoreply.js` if pure, `server/src/db/autoreply.js` for storage, `server/src/wa/autoreply.js` for the hook |
 | Anything about JIDs | `server/src/util/jid.js` if pure, `server/src/db/lidmap.js` if it needs the database |
 | Planned feature brief | `features/upcoming/<feature>.md`; delete it only after implementation, tests, and permanent docs are complete |

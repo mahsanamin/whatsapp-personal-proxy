@@ -132,6 +132,14 @@ transports fan it out:
 - `/api/events` — Server-Sent Events. Used by `wpp watch`, because SSE needs nothing
   beyond Python's standard library.
 
+### Auto-reply
+
+After a message is stored, `wa/autoreply.js` looks at it on its own queue, so it never
+slows ingestion. Only fresh `notify` messages from chats in the active rule set's scope
+get as far as a decision, and every decision is logged. The rules, limits and checks are
+pure functions in `util/autoreply.js`. Replies go out through `wa/send.js` like every
+other send. See [`autoreply.md`](autoreply.md).
+
 ### Contact-name confidence and repair
 
 Message profile names belong only to incoming authors. Outgoing message names
