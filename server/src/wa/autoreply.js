@@ -4,7 +4,7 @@ import { config } from '../config.js'
 import { expandJids, canonicalJid, resolveNames } from '../db/lidmap.js'
 import {
   isEnabled, loadActiveRuleSet, isAllowlisted, claimMessage, recordManualReply,
-  isBotReply, logDecision, contactSnapshot, saveContact, prune,
+  isBotReply, logDecision, contactSnapshot, saveContact, prune, getServerLimits,
 } from '../db/autoreply.js'
 import { decide, liveMessageRefusal, isManualReply, scopeRefusal } from '../util/autoreply.js'
 import { ensureConnected, isOwnJid, recordSentMessage, toNumber } from './client.js'
@@ -43,7 +43,9 @@ export function onMessageIngested(raw, normalized, upsertType) {
 async function handle(raw, normalized, upsertType) {
   const nowMs = Date.now()
   const sentAtSeconds = toNumber(raw?.messageTimestamp)
-  const { maxAgeSeconds } = config.autoreply
+  // Read per message, so a limit changed in the console applies without a restart.
+  const { limits } = getServerLimits()
+  const { maxAgeSeconds } = limits
 
   if (normalized?.is_from_me) {
     // Cheap test first: history replays thousands of own messages on a reconnect.
@@ -89,7 +91,7 @@ async function handle(raw, normalized, upsertType) {
     message: { type: normalized.type, text: normalized.body, chatAliases: aliases, senderName },
     nowMs,
     stats: snapshot.stats,
-    limits: config.autoreply,
+    limits,
   })
 
   const base = {

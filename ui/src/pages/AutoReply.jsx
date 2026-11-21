@@ -58,6 +58,122 @@ function saveFile(name, text) {
   URL.revokeObjectURL(url)
 }
 
+const LIMIT_FIELDS = [
+  { key: 'minGapSeconds', label: 'Delay between replies in a chat', unit: 'seconds' },
+  { key: 'maxPerChatPerHour', label: 'Replies per contact per hour', unit: 'replies' },
+  { key: 'maxPerChatPerDay', label: 'Replies per contact per day', unit: 'replies' },
+  { key: 'maxPerHour', label: 'Replies per hour, all chats', unit: 'replies' },
+  { key: 'maxAgeSeconds', label: 'Ignore messages older than', unit: 'seconds' },
+]
+
+/** Same rule as the server: a whole number inside the bounds. */
+function limitProblem(value, bounds) {
+  if (!bounds) return null
+  const number = Number(value)
+  if (value === '' || !Number.isInteger(number) || number < bounds.min || number > bounds.max) {
+    return `Whole number from ${bounds.min} to ${bounds.max}`
+  }
+  return null
+}
+
+function ServerLimits({ settings, onChange }) {
+  const [values, setValues] = useState({})
+  const [error, setError] = useState(null)
+  const [note, setNote] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (!settings?.limits) return
+    setValues(Object.fromEntries(LIMIT_FIELDS.map(({ key }) => [key, String(settings.limits[key])])))
+  }, [settings])
+
+  if (!settings?.limits || !settings.bounds) return null
+
+  const problems = Object.fromEntries(LIMIT_FIELDS.map(({ key }) => [key, limitProblem(values[key], settings.bounds[key])]))
+  const changed = LIMIT_FIELDS.filter(({ key }) => values[key] !== String(settings.limits[key]))
+  const hasProblem = LIMIT_FIELDS.some(({ key }) => problems[key])
+
+  const send = async (request, done) => {
+    setBusy(true)
+    setError(null)
+    setNote(null)
+    try {
+      onChange(await request())
+      setNote(done)
+    } catch (err) {
+      setError(err.message)
+    }
+    setBusy(false)
+  }
+
+  const save = () => send(
+    () => api('/autoreply/limits', {
+      method: 'PUT',
+      body: Object.fromEntries(changed.map(({ key }) => [key, Number(values[key])])),
+    }),
+    'Saved. The next incoming message uses these limits.',
+  )
+
+  const reset = () => {
+    if (!window.confirm('Reset every server limit to the defaults from .env?')) return
+    send(() => api('/autoreply/limits', { method: 'DELETE' }), 'Reset to the defaults.')
+  }
+
+  return (
+    <div className={card}>
+      <div className="flex items-center justify-between mb-1">
+        <h2 className={label + ' mb-0'}>Server limits</h2>
+        <button onClick={reset} disabled={busy || !settings.overridden?.length} className={`${smallButton} disabled:opacity-40 disabled:hover:bg-transparent`}>
+          Reset to defaults
+        </button>
+      </div>
+      <p className="text-[11px] text-neutral-500 mb-4 leading-relaxed">
+        Apply to every rule set. A rule set can be stricter than these, never looser. Changing them does not take a live rule set out of live mode.
+      </p>
+      <div className="grid sm:grid-cols-2 gap-4">
+        {LIMIT_FIELDS.map(({ key, label: text, unit }) => {
+          const bounds = settings.bounds[key]
+          const overridden = settings.overridden?.includes(key)
+          return (
+            <div key={key}>
+              <label htmlFor={`limit-${key}`} className="block text-xs text-neutral-300 mb-1.5">
+                {text}
+                {overridden && <span className="ml-2 text-[10px] text-accent">changed</span>}
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  id={`limit-${key}`}
+                  type="number"
+                  min={bounds.min}
+                  max={bounds.max}
+                  step={1}
+                  value={values[key] ?? ''}
+                  onChange={e => setValues(current => ({ ...current, [key]: e.target.value }))}
+                  className={`${input} w-28 ${problems[key] ? 'ring-1 ring-red-500/60' : ''}`}
+                />
+                <span className="text-xs text-neutral-500">{unit}</span>
+                <span className="text-[11px] text-neutral-600 ml-auto">default {settings.defaults[key]}</span>
+              </div>
+              {problems[key] && <p className="text-[11px] text-red-400 mt-1">{problems[key]}</p>}
+            </div>
+          )
+        })}
+      </div>
+      <div className="flex items-center gap-3 mt-5">
+        <button
+          onClick={save}
+          disabled={busy || hasProblem || changed.length === 0}
+          className="text-sm font-semibold rounded-xl px-5 py-2 bg-accent hover:bg-emerald-400 text-black disabled:opacity-40 disabled:hover:bg-accent transition-all"
+        >
+          Save
+        </button>
+        {error && <span className="text-xs text-red-400">{error}</span>}
+        {note && !error && <span className="text-xs text-neutral-400">{note}</span>}
+      </div>
+    </div>
+  )
+}
+
 export default function AutoReply() {
   const [settings, setSettings] = useState(null)
   const [ruleSets, setRuleSets] = useState([])
@@ -233,10 +349,6 @@ export default function AutoReply() {
             </p>
             <p className="text-[11px] text-neutral-500 mt-1 leading-relaxed">
               Only the active rule set runs. Dry run logs what it would send; Live sends from your number.
-              {settings?.limits && (
-                <> Server caps: {settings.limits.maxPerChatPerHour}/contact/hour, {settings.limits.maxPerChatPerDay}/contact/day,
-                  {' '}{settings.limits.maxPerHour}/hour overall, at least {settings.limits.minGapSeconds}s between replies in a chat.</>
-              )}
             </p>
           </div>
           <button
@@ -249,6 +361,8 @@ export default function AutoReply() {
             {settings?.enabled ? 'Turn off' : 'Turn on'}
           </button>
         </div>
+
+        <ServerLimits settings={settings} onChange={setSettings} />
 
         {/* Rule sets */}
         <div>

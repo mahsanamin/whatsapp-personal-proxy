@@ -190,16 +190,16 @@ a single rule, which then overrides the set value.
 ## Safety rules that always apply
 
 - **Live messages only.** Only messages WhatsApp delivers as new (`notify`) and sent
-  within the last few minutes (`AUTOREPLY_MAX_AGE_S`, 180 seconds by default) are
-  considered. History sync, catch-up after a reconnect and offline delivery are ignored,
-  so a reconnect cannot trigger hundreds of replies.
+  within the last few minutes (180 seconds by default, see "Server limits") are
+  considered. History sync, catch-up after a reconnect and offline delivery are
+  ignored, so a reconnect cannot trigger hundreds of replies.
 - **Never answered:** your own messages, status broadcasts, newsletters, reactions,
   protocol messages and unknown message types.
 - **One answer per message.** The message id is recorded before sending, so a message
   WhatsApp delivers twice is answered at most once.
-- **Server caps** that a template can only tighten: a minimum gap between any two
+- **Server caps** that a template can only tighten: a minimum delay between any two
   replies in a chat, replies per contact per hour and per day, and replies per hour
-  overall. See `docs/configuration.md`.
+  overall. See "Server limits" below.
 - **Checked again right before sending:** the global switch, that the same rule set is
   still active, live and unchanged, and that the chat is still in scope with the current
   allow list.
@@ -208,6 +208,27 @@ a single rule, which then overrides the set value.
 - **You taking over wins.** A message you send in a chat by hand (from your phone or the
   console) pauses the bot there and starts a fresh conversation count. The bot's own
   replies are recognised by their message id and do not count.
+
+## Server limits
+
+The caps above, and the age after which a message counts as history, are set in the
+**Server limits** panel on the Auto-reply page:
+
+| In the console | Field | Default (`.env`) | Allowed |
+|---|---|---|---|
+| Delay between replies in a chat | `minGapSeconds` | `AUTOREPLY_MIN_GAP_S`, 60 | 5 to 3,600 seconds |
+| Replies per contact per hour | `maxPerChatPerHour` | `AUTOREPLY_MAX_PER_CHAT_PER_HOUR`, 3 | 1 to 100 |
+| Replies per contact per day | `maxPerChatPerDay` | `AUTOREPLY_MAX_PER_CHAT_PER_DAY`, 10 | 1 to 1,000 |
+| Replies per hour, all chats | `maxPerHour` | `AUTOREPLY_MAX_PER_HOUR`, 30 | 1 to 1,000 |
+| Ignore messages older than | `maxAgeSeconds` | `AUTOREPLY_MAX_AGE_S`, 180 | 30 to 600 seconds |
+
+A saved value is kept in the database, so it survives a restart, and the next incoming
+message already uses it. "Reset to defaults" clears every saved value and the `.env`
+values apply again. Saving a limit does not change any rule set, so a live rule set
+stays live.
+
+Only the web console can change these, because raising a cap lets the server send more.
+An API key with `autoreply:manage` can read them from `GET /api/autoreply/settings`.
 
 ## Contacts, floods and loops
 

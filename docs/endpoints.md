@@ -36,7 +36,7 @@ Common codes: `BAD_INPUT`, `UNAUTHORIZED`, `INVALID_TOKEN`, `MISSING_SCOPE`, `NO
 | `channels:summarize` | Reserved for the LLM summary endpoint |
 | `tabs:manage` | Create, rename, and delete tabs |
 | `wa:admin` | Force reconnect and QR refresh |
-| `autoreply:manage` | Manage auto-reply rule sets, test them, read the decision log, mute contacts. Cannot put a rule set live or turn on the kill switch |
+| `autoreply:manage` | Manage auto-reply rule sets, test them, read the decision log, mute contacts. Cannot put a rule set live, turn on the kill switch, or change the server limits |
 
 ## Health and identity
 
@@ -147,8 +147,10 @@ errors come back as `400 BAD_INPUT` with the full list in `details: [{ path, mes
 
 | Method | Path | Scope | Notes |
 |---|---|---|---|
-| `GET` | `/api/autoreply/settings` | `autoreply:manage` | `{ enabled, limits }` |
+| `GET` | `/api/autoreply/settings` | `autoreply:manage` | `{ enabled, limits, defaults, overridden, bounds }`. `limits` are the ones in force, `defaults` come from `.env`, `overridden` names the limits saved from the console |
 | `PUT` | `/api/autoreply/settings` | session | `{ enabled }`. The global switch. Console only |
+| `PUT` | `/api/autoreply/limits` | session | Any of `{ minGapSeconds, maxPerChatPerHour, maxPerChatPerDay, maxPerHour, maxAgeSeconds }` as whole numbers inside `bounds`, otherwise `400 BAD_INPUT`. Saved in SQLite and used from the next message. Does not change any rule set's mode. Returns the same shape as `GET /settings`. Console only |
+| `DELETE` | `/api/autoreply/limits` | session | Clears every saved limit, so the `.env` defaults apply again. Console only |
 | `GET` | `/api/autoreply/rulesets` | `autoreply:manage` | List, without templates |
 | `POST` | `/api/autoreply/rulesets` | `autoreply:manage` | `{ template }` as JSON text or an object. Starts inactive in `dry_run`. `201` |
 | `GET` | `/api/autoreply/rulesets/:id` | `autoreply:manage` | Includes `template` as stored text |

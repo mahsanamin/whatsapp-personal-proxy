@@ -65,6 +65,16 @@ and reports whatever WhatsApp would no longer supply instead of failing.
 
 Server caps for `docs/autoreply.md`. A rule set can be stricter, never looser.
 
+These are the **defaults**. Each one can be changed on the console's Auto-reply page
+("Server limits"), which saves the new value in SQLite and uses it from the next incoming
+message, with no restart. A saved value wins over the variable here until you press
+"Reset to defaults" (or save the default value again). A limit that was never changed in
+the console follows this file, including after you edit it and restart.
+
+The console accepts: delay between replies 5 to 3,600 seconds, replies per contact per
+hour 1 to 100, per day 1 to 1,000, replies per hour overall 1 to 1,000, and message age
+30 to 600 seconds.
+
 | Variable | Default | Purpose |
 |---|---|---|
 | `AUTOREPLY_MIN_GAP_S` | `60` | Minimum seconds between two auto-replies in one chat. Cannot go below 5. Lower it for menu-style rule sets, where the contact answers within seconds |

@@ -100,6 +100,15 @@ test('an API key can never make the auto-replier send', () => {
   assert.ok(routes.includes('stateChangeRefusal('), 'putting a rule set live must go through the console-only check')
   const unmute = routes.slice(routes.indexOf("fastify.delete('/autoreply/contacts/:jid/mute'"), routes.indexOf("fastify.delete('/autoreply/contacts/:jid/mute'") + 120)
   assert.ok(unmute.includes('requireSession'), 'lifting a mute lets replies flow again, so it must be console only')
+  for (const method of ['put', 'delete']) {
+    const marker = `fastify.${method}('/autoreply/limits'`
+    assert.ok(routes.includes(marker), `${marker} is gone`)
+    const limits = routes.slice(routes.indexOf(marker), routes.indexOf(marker) + 120)
+    assert.ok(limits.includes('requireSession') && !limits.includes('manage'),
+      'raising the server limits lets the bot send more, so changing them must be console only')
+  }
+  assert.ok(!read('../src/wa/autoreply.js').includes('config.autoreply'),
+    'the engine must read the limits saved from the console, not only the .env defaults')
   assert.ok(routes.includes('isSession: Boolean(request.session?.authenticated)'), 'the live check must look at the console session')
 
   const engine = read('../src/wa/autoreply.js')

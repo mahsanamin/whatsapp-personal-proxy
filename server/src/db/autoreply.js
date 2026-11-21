@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto'
 import { nanoid } from 'nanoid'
 import { db } from './index.js'
+import { config } from '../config.js'
 import { expandJids, canonicalJid } from './lidmap.js'
 import { isGroup } from '../util/jid.js'
 import {
   validateRuleSet, HANDOFF_RULE_ID, conversationStart, nextLoopStreak, textHash,
 } from '../util/autoreply.js'
+import { LIMIT_FIELDS, mergeLimits } from '../util/autoreplyLimits.js'
 
 const HOUR_MS = 60 * 60 * 1000
 const KEEP_DECISIONS_MS = 30 * 24 * HOUR_MS
@@ -30,6 +32,53 @@ export function setEnabled(enabled) {
     INSERT INTO autoreply_settings (key, value) VALUES ('enabled', ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
   `).run(enabled ? '1' : '0')
+}
+
+// ─── Server limits ───────────────────────────────────────────────────
+
+const LIMIT_KEY_PREFIX = 'limit.'
+
+function loadLimitOverrides() {
+  const rows = db.prepare('SELECT key, value FROM autoreply_settings WHERE key LIKE ?').all(`${LIMIT_KEY_PREFIX}%`)
+  const overrides = {}
+  for (const { key, value } of rows) overrides[key.slice(LIMIT_KEY_PREFIX.length)] = Number(value)
+  return overrides
+}
+
+/**
+ * The limits in force right now, read on every decision so a change from the
+ * console applies to the next message. `.env` supplies the defaults.
+ */
+export function getServerLimits() {
+  const defaults = config.autoreply
+  try {
+    return { defaults, ...mergeLimits(defaults, loadLimitOverrides()) }
+  } catch (_) {
+    return { defaults, limits: { ...defaults }, overridden: [] }
+  }
+}
+
+/**
+ * Saves validated limits. A value equal to the default is stored as "no
+ * override", so a later change to `.env` still takes effect for it.
+ */
+export function saveLimitOverrides(values) {
+  const upsert = db.prepare(`
+    INSERT INTO autoreply_settings (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `)
+  const remove = db.prepare('DELETE FROM autoreply_settings WHERE key = ?')
+  db.transaction(() => {
+    for (const [field, value] of Object.entries(values)) {
+      if (!LIMIT_FIELDS.includes(field)) continue
+      if (value === config.autoreply[field]) remove.run(LIMIT_KEY_PREFIX + field)
+      else upsert.run(LIMIT_KEY_PREFIX + field, String(value))
+    }
+  })()
+}
+
+export function clearLimitOverrides() {
+  db.prepare('DELETE FROM autoreply_settings WHERE key LIKE ?').run(`${LIMIT_KEY_PREFIX}%`)
 }
 
 // ─── Rule sets ───────────────────────────────────────────────────────

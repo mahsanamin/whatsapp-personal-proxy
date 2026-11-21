@@ -1,4 +1,3 @@
-import { config } from '../config.js'
 import { requireScope } from '../middleware/token.js'
 import { requireSession } from '../middleware/session.js'
 import { toJid } from '../util/jid.js'
@@ -12,7 +11,9 @@ import {
   isEnabled, setEnabled, listRuleSets, getRuleSet, createRuleSet, updateRuleSet,
   deleteRuleSet, setRuleSetState, isAllowlisted, listDecisions, contactSnapshot,
   listContacts, saveContact, unmuteContact, senderKey,
+  getServerLimits, saveLimitOverrides, clearLimitOverrides,
 } from '../db/autoreply.js'
+import { LIMIT_BOUNDS, validateLimitsPatch } from '../util/autoreplyLimits.js'
 
 const manage = requireScope('autoreply:manage')
 
@@ -32,13 +33,15 @@ function invalid(reply, errors) {
   })
 }
 
+function settings() {
+  const { limits, defaults, overridden } = getServerLimits()
+  return { enabled: isEnabled(), limits, defaults, overridden, bounds: LIMIT_BOUNDS }
+}
+
 const notFound = (reply) => reply.code(404).send({ error: 'Rule set not found', code: 'NOT_FOUND' })
 
 export default async function autoreplyRoutes(fastify) {
-  fastify.get('/autoreply/settings', { preHandler: manage }, async () => ({
-    enabled: isEnabled(),
-    limits: config.autoreply,
-  }))
+  fastify.get('/autoreply/settings', { preHandler: manage }, async () => settings())
 
   // The kill switch. Console only: turning it on lets the server send.
   fastify.put('/autoreply/settings', { preHandler: requireSession }, async (request, reply) => {
@@ -47,7 +50,21 @@ export default async function autoreplyRoutes(fastify) {
       return reply.code(400).send({ error: 'Field "enabled" must be true or false', code: 'BAD_INPUT' })
     }
     setEnabled(enabled)
-    return { enabled: isEnabled(), limits: config.autoreply }
+    return settings()
+  })
+
+  // Console only, like the kill switch: raising a cap lets the server send more.
+  // Rule sets are not touched, so a live one stays live.
+  fastify.put('/autoreply/limits', { preHandler: requireSession }, async (request, reply) => {
+    const { ok, errors, values } = validateLimitsPatch(request.body)
+    if (!ok) return reply.code(400).send({ error: errors.join('; '), code: 'BAD_INPUT', details: errors })
+    saveLimitOverrides(values)
+    return settings()
+  })
+
+  fastify.delete('/autoreply/limits', { preHandler: requireSession }, async () => {
+    clearLimitOverrides()
+    return settings()
   })
 
   fastify.get('/autoreply/rulesets', { preHandler: manage }, async () => listRuleSets())
@@ -184,7 +201,7 @@ export default async function autoreplyRoutes(fastify) {
         message,
         nowMs,
         stats: contactSnapshot({ ruleSet, rulesetId, chatJid, senderJid: chatJid, text: body.text, action: 'sent', nowMs }).stats,
-        limits: config.autoreply,
+        limits: getServerLimits().limits,
       })
 
     return {
