@@ -87,7 +87,12 @@ export const setRuleSetState = db.transaction((id, { mode, active }) => {
   return getRuleSet(id)
 })
 
-/** The rule set the engine should run, parsed, or null. Re-read on every use. */
+// Validation times each regex against long inputs, which is wasted work on
+// every message and could misfire on a busy moment. A template only changes
+// with updated_at, so validate it once per version.
+let validated = { key: null, result: null }
+
+/** The rule set the engine should run, parsed, or null. The row is re-read on every use. */
 export function loadActiveRuleSet() {
   const row = db.prepare(`
     SELECT ${SUMMARY_COLUMNS}, template FROM autoreply_rulesets
@@ -95,7 +100,9 @@ export function loadActiveRuleSet() {
     ORDER BY updated_at DESC LIMIT 1
   `).get()
   if (!row) return null
-  const { ok, ruleSet, errors } = validateRuleSet(row.template)
+  const key = `${row.id}:${row.updated_at}:${row.template.length}`
+  if (validated.key !== key) validated = { key, result: validateRuleSet(row.template) }
+  const { ok, ruleSet, errors } = validated.result
   return { row, ruleSet: ok ? ruleSet : null, errors }
 }
 

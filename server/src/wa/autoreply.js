@@ -46,11 +46,11 @@ async function handle(raw, normalized, upsertType) {
   const { maxAgeSeconds } = config.autoreply
 
   if (normalized?.is_from_me) {
+    // Cheap test first: history replays thousands of own messages on a reconnect.
+    if (!isManualReply({ message: normalized, sentAtSeconds, nowMs, maxAgeSeconds, isBotMessage: false })) return
     const id = normalized.id
-    const isBotMessage = botMessageIds.has(id) || isBotReply(id)
-    if (isManualReply({ message: normalized, sentAtSeconds, nowMs, maxAgeSeconds, isBotMessage })) {
-      recordManualReply(canonicalJid(normalized.jid), nowMs)
-    }
+    if (botMessageIds.has(id) || isBotReply(id)) return
+    recordManualReply(canonicalJid(normalized.jid), nowMs)
     return
   }
 
