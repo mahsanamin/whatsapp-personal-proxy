@@ -70,7 +70,11 @@ async function sendVoiceNote(sock, jid, note, options) {
   msg.message.audioMessage.waveform = note.waveform
   await sock.relayMessage(jid, msg.message, { messageId: msg.key.id })
   // sendMessage emits our own message so the console sees the echo; keep that.
-  sock.upsertMessage(msg, 'append').catch(() => {})
+  // upsertMessage is a Baileys buffered function: it switches event buffering
+  // on and leaves flushing to the socket's own processing loop. Called from
+  // here, outside that loop, it would hold messages.upsert and every other
+  // bufferable event until some unrelated incoming message flushed them.
+  sock.upsertMessage(msg, 'append').catch(() => {}).finally(() => sock.ev.flush())
   return msg
 }
 

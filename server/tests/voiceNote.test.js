@@ -56,6 +56,10 @@ test('the waveform is put back after Baileys builds the voice note', () => {
   assert.ok(src.includes('generateWAMessage('), 'voice notes must be built, not sent via sendMessage')
   assert.ok(src.includes('audioMessage.waveform = note.waveform'), 'waveform is no longer restored')
   assert.ok(src.includes('prepareVoiceNote(buffer)'), 'voice uploads must be re-encoded')
+  assert.ok(
+    src.includes('.finally(() => sock.ev.flush())'),
+    'upsertMessage turns event buffering on and never flushes; without this, events stall',
+  )
 })
 
 test('the server image installs ffmpeg', () => {
