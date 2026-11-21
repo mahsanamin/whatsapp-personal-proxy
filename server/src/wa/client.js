@@ -19,7 +19,11 @@ import { jidUser } from '../util/jid.js'
 import { describeContacts } from '../util/vcard.js'
 
 const MAX_RETRIES = 10
+// A linked account that has not reached 'open' by now is stuck, not slow.
+const CONNECT_WATCHDOG_MS = 90_000
 let retries = 0
+let waVersion = null
+let connectWatchdog = null
 let currentSock = null
 let sessionDir = config.waSessionPath
 let linkedCache = null
@@ -90,7 +94,16 @@ export async function createWAClient(sessionPath, eventBus) {
   refreshLinked()
   rememberMyJids(state.creds)
 
-  const { version } = await fetchLatestBaileysVersion()
+  // Fetched from GitHub, which has no timeout by default. One request that
+  // never answered left a reconnect waiting forever: no socket, no error, no
+  // retry, and three weeks of messages never arrived. Fetch once, with a
+  // timeout; Baileys falls back to its bundled version on failure.
+  let version = waVersion
+  if (!version) {
+    const latest = await fetchLatestBaileysVersion({ timeout: 10_000 })
+    version = latest.version
+    if (latest.isLatest) waVersion = version
+  }
 
   const sock = makeWASocket({
     version,
@@ -123,6 +136,7 @@ export async function createWAClient(sessionPath, eventBus) {
   })
 
   currentSock = sock
+
   sock.ev.on('creds.update', async () => {
     await saveCreds()
     refreshLinked()
@@ -195,7 +209,11 @@ export async function createWAClient(sessionPath, eventBus) {
       eventBus.emit('wa.status', { status: 'connecting' })
     }
 
+    // A socket replaced by a newer one must not schedule a second reconnect.
+    if (connection === 'close' && currentSock !== sock) return
+
     if (connection === 'close') {
+      clearTimeout(connectWatchdog)
       eventBus.waStatus = 'close'
       eventBus.emit('wa.status', { status: 'close' })
 
@@ -219,16 +237,21 @@ export async function createWAClient(sessionPath, eventBus) {
         return
       }
 
-      // Retry with exponential backoff
-      if (retries < MAX_RETRIES) {
-        const delay = Math.min(1000 * Math.pow(2, retries), 60_000)
-        retries++
-        setTimeout(() => createWAClient(sessionPath, eventBus), delay)
-      } else {
-        eventBus.emit('wa.failed', { message: 'Max reconnect attempts reached' })
-      }
+      scheduleReconnect(sessionPath, eventBus)
     }
   })
+
+  // An unlinked account legitimately sits in 'connecting' while it shows QR
+  // codes, so only a linked one is held to the deadline.
+  clearTimeout(connectWatchdog)
+  if (isLinked()) {
+    connectWatchdog = setTimeout(() => {
+      if (currentSock !== sock || eventBus.waStatus === 'open') return
+      logger.warn('WhatsApp did not connect in time, restarting the connection')
+      // Ending the socket fires 'close', which schedules the retry.
+      try { sock.end(new Error('connect timeout')) } catch (_) { scheduleReconnect(sessionPath, eventBus) }
+    }, CONNECT_WATCHDOG_MS)
+  }
 
   // ─── Contact name resolution system ────────────────────────────────
   // WhatsApp uses @lid JIDs for chats but names come with @s.whatsapp.net JIDs.
@@ -751,6 +774,26 @@ export function isLinked() {
 export function ensureConnected() {
   if (!currentSock?.user) return null
   return currentSock
+}
+
+/**
+ * Retry with exponential backoff, and never stop. Giving up after a fixed
+ * count left the proxy disconnected until someone restarted it, and a
+ * reconnect that threw was never retried at all.
+ */
+function scheduleReconnect(sessionPath, eventBus) {
+  const delay = Math.min(1000 * Math.pow(2, retries), 60_000)
+  retries++
+  if (retries === MAX_RETRIES) {
+    logger.warn({ retries }, 'WhatsApp still not reconnected, retrying every minute')
+    eventBus.emit('wa.failed', { message: 'Max reconnect attempts reached' })
+  }
+  setTimeout(() => {
+    createWAClient(sessionPath, eventBus).catch(err => {
+      logger.warn({ err: err.message }, 'reconnect failed')
+      scheduleReconnect(sessionPath, eventBus)
+    })
+  }, delay)
 }
 
 export function resetRetries() {
