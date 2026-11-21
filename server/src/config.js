@@ -59,7 +59,11 @@ export const config = {
   // Auto-reply floors. A rule set can be stricter, never looser. Together they
   // bound how much two bots answering each other can ever send.
   autoreply: {
-    minGapSeconds: Math.max(60, parseInt(process.env.AUTOREPLY_MIN_GAP_S || '60', 10) || 60),
+    // Defaults to a minute. It may be lowered to 5 seconds, because a menu the
+    // contact answers with "1", "2" or "3" is useless if the answer is dropped for
+    // arriving too soon. The hourly and daily caps and the flood and loop checks
+    // still bound what two bots can send each other.
+    minGapSeconds: Math.max(5, parseInt(process.env.AUTOREPLY_MIN_GAP_S || '60', 10) || 60),
     maxPerChatPerHour: Math.max(1, parseInt(process.env.AUTOREPLY_MAX_PER_CHAT_PER_HOUR || '3', 10) || 3),
     maxPerChatPerDay: Math.max(1, parseInt(process.env.AUTOREPLY_MAX_PER_CHAT_PER_DAY || '10', 10) || 10),
     maxPerHour: Math.max(1, parseInt(process.env.AUTOREPLY_MAX_PER_HOUR || '30', 10) || 30),
