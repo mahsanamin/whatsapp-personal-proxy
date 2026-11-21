@@ -3,6 +3,21 @@
 Start with `CLAUDE.md` for the shape of the project, then `docs/ai_rules/` for the rules
 any change must follow. `docs/project-structure.md` says where a given change belongs.
 
+## At the start of a coding session: check for a newer stable Baileys
+
+Baileys follows WhatsApp's protocol, and WhatsApp changes it without notice. Fall behind
+and the linked device stops working, so check this before other work. Node is not on the
+host, so run it in a container:
+
+```bash
+docker run --rm node:20-alpine npm view @whiskeysockets/baileys versions --json
+```
+
+Ignore anything with a pre-release suffix (`-rc`, `-beta`, ...), and ignore 6.17.16,
+which is deprecated and vulnerable (`npm view @whiskeysockets/baileys@<version> deprecated`
+says so). If a stable version newer than the one in `server/package-lock.json` is left,
+tell the user before doing anything else. Never move to a pre-release.
+
 ## Before you change anything
 
 1. `docs/ai_rules/security.md` — this proxy holds a live WhatsApp account. A mistake here

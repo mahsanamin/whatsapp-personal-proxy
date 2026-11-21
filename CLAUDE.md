@@ -1,5 +1,8 @@
 # WPP — WhatsApp Personal Proxy
 
+`AGENTS.md` holds the working rules, including the Baileys version check to run at the
+start of every coding session. Read it first.
+
 Self-hosted WhatsApp gateway. The server runs on **one** machine (the one your phone is
 linked to); every other machine drives it through the `wpp` CLI over REST.
 

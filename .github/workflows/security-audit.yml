@@ -46,6 +46,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      # Several suites import fastify and better-sqlite3, so the server's
+      # dependencies have to be installed before the tests can load.
+      - run: cd server && npm ci
       - name: Server unit tests
         run: cd server && npm test
       - uses: actions/setup-python@v5
