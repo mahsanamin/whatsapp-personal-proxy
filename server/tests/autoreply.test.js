@@ -127,13 +127,23 @@ test('slow regex shapes are refused', () => {
   assert.match(regexProblem('(a|aa)*b'), /repeated group/)
   assert.match(regexProblem('(\\w+\\s?)*x'), /repeated group/)
   assert.match(regexProblem('(a)\\1'), /Backreferences/)
-  assert.match(regexProblem('.*a.*b.*c'), /unbounded repeats/)
+  assert.match(regexProblem('.*a.*b.*c'), /backtrack too much/)
+  // Bounded repeats add up too: each of these took seconds on a 500-character message.
+  assert.match(regexProblem('é{0,40}é{0,40}é{0,40}é{0,40}x'), /backtrack too much/)
+  assert.match(regexProblem('[^a1 b!]{0,60}[^a1 b!]{0,60}[^a1 b!]{0,60}[^a1 b!]{0,60}$x'), /backtrack too much/)
+  assert.match(regexProblem('z{0,30}z{0,30}z{0,30}z{0,30}z{0,30}y'), /backtrack too much/)
   assert.match(regexProblem('x'.repeat(LIMITS.maxRegexLength + 1)), /At most/)
   assert.match(regexProblem('(unclosed'), /Not a valid pattern/)
 })
 
+test('many regexes cannot add up to a slow template', () => {
+  const rules = Array.from({ length: 5 }, (_, i) => ({ id: `r${i}`, match: { regex: `x${i}[a-z]{0,19}.*y` }, response: { type: 'text', text: 'x' } }))
+  const errors = validateRuleSet(template({ rules })).errors.map(e => e.message).join('\n')
+  assert.match(errors, /together could backtrack too much/)
+})
+
 test('ordinary regexes pass', () => {
-  for (const ok of ['\\border\\s*#?\\d{4,10}\\b', '^(hi|hello)$', '(ab){2}', '[(+*)]+', 'refund\\?']) {
+  for (const ok of ['\\border\\s*#?\\d{4,10}\\b', '^(hi|hello)$', '(ab){2}', '[(+*)]+', 'refund\\?', '\\d+\\s{0,3}kg']) {
     assert.equal(regexProblem(ok), null, ok)
   }
 })
@@ -337,21 +347,28 @@ test('a flood mutes the sender', () => {
   assert.deepEqual(result.mute, { target: 'sender', minutes: 360, reason: 'flood' })
 })
 
-test('fast replies three times in a row mean another bot', () => {
-  let streak = 0
-  const lastSentAt = NOON_SGT - 10_000
-  for (let i = 0; i < 3; i++) {
-    streak = nextLoopStreak({ previousStreak: streak, lastSentAt, incomingAt: lastSentAt + 2000, replyWithinSeconds: 3 })
+test('fast replies after three of our sends in a row mean another bot', () => {
+  let state = { streak: 0, checkedSentAt: null }
+  for (let round = 0; round < 3; round++) {
+    const lastSentAt = NOON_SGT + round * 120_000
+    state = nextLoopStreak({ previousStreak: state.streak, lastSentAt, checkedSentAt: state.checkedSentAt, incomingAt: lastSentAt + 2000, replyWithinSeconds: 3 })
+    // Messages our own limits swallow before the next send change nothing.
+    state = nextLoopStreak({ previousStreak: state.streak, lastSentAt, checkedSentAt: state.checkedSentAt, incomingAt: lastSentAt + 30_000, replyWithinSeconds: 3 })
   }
+  const streak = state.streak
   assert.equal(streak, 3)
   const result = run(valid(), 'price', { loopStreak: streak })
   assert.deepEqual(result.mute, { target: 'contact', minutes: 1440, reason: 'loop' })
 })
 
-test('a slow reply resets the loop streak, and so does no send at all', () => {
-  assert.equal(nextLoopStreak({ previousStreak: 2, lastSentAt: NOON_SGT, incomingAt: NOON_SGT + 4000, replyWithinSeconds: 3 }), 0)
-  assert.equal(nextLoopStreak({ previousStreak: 2, lastSentAt: null, incomingAt: NOON_SGT, replyWithinSeconds: 3 }), 0)
-  assert.equal(nextLoopStreak({ previousStreak: 1, lastSentAt: NOON_SGT, incomingAt: NOON_SGT + 3000, replyWithinSeconds: 3 }), 2)
+test('a slow reply resets the loop streak', () => {
+  assert.equal(nextLoopStreak({ previousStreak: 2, lastSentAt: NOON_SGT, incomingAt: NOON_SGT + 4000, replyWithinSeconds: 3 }).streak, 0)
+  assert.equal(nextLoopStreak({ previousStreak: 0, lastSentAt: null, incomingAt: NOON_SGT, replyWithinSeconds: 3 }).streak, 0)
+  assert.equal(nextLoopStreak({ previousStreak: 1, lastSentAt: NOON_SGT, incomingAt: NOON_SGT + 3000, replyWithinSeconds: 3 }).streak, 2)
+  assert.equal(
+    nextLoopStreak({ previousStreak: 2, lastSentAt: NOON_SGT, checkedSentAt: NOON_SGT, incomingAt: NOON_SGT + 1000, replyWithinSeconds: 3 }).streak, 2,
+    'one send is judged once',
+  )
 })
 
 test('a manual reply pauses the chat', () => {

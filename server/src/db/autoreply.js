@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { nanoid } from 'nanoid'
 import { db } from './index.js'
 import { expandJids, canonicalJid } from './lidmap.js'
@@ -100,7 +101,7 @@ export function loadActiveRuleSet() {
     ORDER BY updated_at DESC LIMIT 1
   `).get()
   if (!row) return null
-  const key = `${row.id}:${row.updated_at}:${row.template.length}`
+  const key = `${row.id}:${createHash('sha256').update(row.template).digest('hex')}`
   if (validated.key !== key) validated = { key, result: validateRuleSet(row.template) }
   const { ok, ruleSet, errors } = validated.result
   return { row, ruleSet: ok ? ruleSet : null, errors }
@@ -128,7 +129,7 @@ export function claimMessage(messageId, nowMs) {
 
 // ─── Contacts ────────────────────────────────────────────────────────
 
-const CONTACT_FIELDS = ['muted_until', 'mute_reason', 'last_manual_at', 'last_incoming_at', 'conversation_started_at', 'loop_streak', 'last_sent_at']
+const CONTACT_FIELDS = ['muted_until', 'mute_reason', 'last_manual_at', 'last_incoming_at', 'conversation_started_at', 'loop_streak', 'last_sent_at', 'loop_checked_sent_at']
 
 /** The key for one person inside a group: flood is counted per sender there. */
 export const senderKey = (groupJid, senderJid) => `${groupJid}|${senderJid}`
@@ -139,7 +140,7 @@ export const senderKey = (groupJid, senderJid) => `${groupJid}|${senderJid}`
  * what was known at the time, and both are the same person.
  */
 export function loadContact(keys) {
-  const merged = { muted_until: null, mute_reason: null, last_manual_at: null, last_incoming_at: null, conversation_started_at: null, loop_streak: 0, last_sent_at: null }
+  const merged = { muted_until: null, mute_reason: null, last_manual_at: null, last_incoming_at: null, conversation_started_at: null, loop_streak: 0, last_sent_at: null, loop_checked_sent_at: null }
   if (!keys.length) return merged
   const rows = db.prepare(`SELECT * FROM autoreply_contacts WHERE contact_key IN (${placeholders(keys)})`).all(...keys)
   for (const row of rows) {
@@ -147,7 +148,7 @@ export function loadContact(keys) {
       merged.muted_until = row.muted_until
       merged.mute_reason = row.mute_reason
     }
-    for (const field of ['last_manual_at', 'last_incoming_at', 'conversation_started_at', 'last_sent_at']) {
+    for (const field of ['last_manual_at', 'last_incoming_at', 'conversation_started_at', 'last_sent_at', 'loop_checked_sent_at']) {
       if ((row[field] || 0) > (merged[field] || 0)) merged[field] = row[field]
     }
     merged.loop_streak = Math.max(merged.loop_streak, row.loop_streak || 0)
@@ -201,13 +202,14 @@ export function listContacts(nowMs) {
     ORDER BY updated_at DESC LIMIT 200
   `).all(nowMs - 7 * 24 * HOUR_MS, nowMs).map(row => {
     const chat = row.contact_key.split('|')[0]
+    const aliases = expandJids(chat)
     const counts = db.prepare(`
       SELECT
         SUM(CASE WHEN action = 'sent' AND at > ? THEN 1 ELSE 0 END) AS sent_24h,
         SUM(CASE WHEN action = 'dry_run' AND at > ? THEN 1 ELSE 0 END) AS dry_run_24h,
         SUM(CASE WHEN action IN ('sent', 'dry_run') AND at >= ? THEN 1 ELSE 0 END) AS conversation_replies
-      FROM autoreply_decisions WHERE chat_jid = ?
-    `).get(dayAgo, dayAgo, row.conversation_started_at || nowMs, chat)
+      FROM autoreply_decisions WHERE chat_jid IN (${placeholders(aliases)})
+    `).get(dayAgo, dayAgo, row.conversation_started_at || nowMs, ...aliases)
     return {
       ...row,
       chat_jid: chat,
@@ -322,12 +324,14 @@ export function contactSnapshot({ ruleSet, rulesetId, chatJid, senderJid, text, 
     nowMs,
     gapMinutes: options.conversation.gap_minutes,
   })
-  const loopStreak = nextLoopStreak({
+  const loop = nextLoopStreak({
     previousStreak: contact.loop_streak,
     lastSentAt: contact.last_sent_at,
+    checkedSentAt: contact.loop_checked_sent_at,
     incomingAt: nowMs,
     replyWithinSeconds: options.loop.reply_within_seconds,
   })
+  const loopStreak = loop.streak
   const hash = textHash(text)
 
   return {
@@ -336,7 +340,7 @@ export function contactSnapshot({ ruleSet, rulesetId, chatJid, senderJid, text, 
     // In a DM the sender is the contact; in a group a flood mutes one person.
     floodKey: inGroup ? senderKey(chatJid, canonicalJid(senderJid)) : contactKey,
     textHash: hash,
-    contactUpdate: { last_incoming_at: nowMs, conversation_started_at: start, loop_streak: loopStreak },
+    contactUpdate: { last_incoming_at: nowMs, conversation_started_at: start, loop_streak: loopStreak, loop_checked_sent_at: loop.checkedSentAt },
     stats: {
       contactMute: { until: contact.muted_until, reason: contact.mute_reason },
       senderMute: sender ? { until: sender.muted_until, reason: sender.mute_reason } : null,

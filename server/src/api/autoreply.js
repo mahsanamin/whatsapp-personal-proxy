@@ -228,7 +228,9 @@ export default async function autoreplyRoutes(fastify) {
     return { ok: true, contact: key, muted_until: nowMs + minutes * 60_000 }
   })
 
-  fastify.delete('/autoreply/contacts/:jid/mute', { preHandler: manage }, async (request, reply) => {
+  // Unmuting lets replies flow again, so like everything else that can lead
+  // to a send it is console only.
+  fastify.delete('/autoreply/contacts/:jid/mute', { preHandler: requireSession }, async (request, reply) => {
     const raw = String(request.params.jid || '')
     // A sender muted inside a group is addressed as "<group>|<sender>".
     const [chatPart, senderPart] = raw.split('|')

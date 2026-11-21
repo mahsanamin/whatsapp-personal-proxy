@@ -107,7 +107,8 @@ export default function AutoReply() {
   })
 
   const setState = (set, changes) => run(async () => {
-    if (changes.mode === 'live' && !window.confirm(`Put "${set.name}" live? When it is active and auto-reply is on, it sends real messages.`)) return
+    const goesLive = changes.mode === 'live' || (changes.active === true && set.mode === 'live')
+    if (goesLive && !window.confirm(`Put "${set.name}" live? When it is active and auto-reply is on, it sends real messages.`)) return
     await api(`/autoreply/rulesets/${set.id}`, { method: 'PATCH', body: changes })
     await loadSets()
   })

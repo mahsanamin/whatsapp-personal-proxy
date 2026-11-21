@@ -185,6 +185,7 @@ export function runMigrations(db) {
       conversation_started_at  INTEGER,
       loop_streak              INTEGER NOT NULL DEFAULT 0,
       last_sent_at             INTEGER,
+      loop_checked_sent_at     INTEGER,
       updated_at               INTEGER NOT NULL
     );
   `)

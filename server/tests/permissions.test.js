@@ -98,6 +98,8 @@ test('an API key can never make the auto-replier send', () => {
   const settings = routes.slice(routes.indexOf("fastify.put('/autoreply/settings'"), routes.indexOf("fastify.put('/autoreply/settings'") + 200)
   assert.ok(settings.includes('requireSession'), 'the auto-reply kill switch must be console only')
   assert.ok(routes.includes('stateChangeRefusal('), 'putting a rule set live must go through the console-only check')
+  const unmute = routes.slice(routes.indexOf("fastify.delete('/autoreply/contacts/:jid/mute'"), routes.indexOf("fastify.delete('/autoreply/contacts/:jid/mute'") + 120)
+  assert.ok(unmute.includes('requireSession'), 'lifting a mute lets replies flow again, so it must be console only')
   assert.ok(routes.includes('isSession: Boolean(request.session?.authenticated)'), 'the live check must look at the console session')
 
   const engine = read('../src/wa/autoreply.js')

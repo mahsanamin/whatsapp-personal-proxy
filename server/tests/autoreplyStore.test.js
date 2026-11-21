@@ -181,9 +181,17 @@ test('mute and unmute a contact by either address', async () => {
   const snapshot = store.contactSnapshot({ ruleSet, rulesetId: 'r', chatJid: PN, senderJid: PN, text: 'x', action: 'sent', nowMs: Date.now() })
   assert.equal(snapshot.stats.contactMute.reason, 'manual')
 
-  await routes.get('DELETE /autoreply/contacts/:jid/mute')({ ...token, params: { jid: PN } }, reply())
+  await routes.get('DELETE /autoreply/contacts/:jid/mute')({ ...session, params: { jid: PN } }, reply())
   const cleared = store.contactSnapshot({ ruleSet, rulesetId: 'r', chatJid: PN, senderJid: PN, text: 'x', action: 'sent', nowMs: Date.now() })
   assert.equal(cleared.stats.contactMute.until, null)
+})
+
+test('contact counts include decisions logged under either address', () => {
+  store.saveContact(PN, { last_incoming_at: NOW, conversation_started_at: NOW - 60_000 }, NOW)
+  store.logDecision({ at: NOW - 1000, chat_jid: LID, ruleset_id: 'r', rule_id: 'price', action: 'sent' })
+  const row = store.listContacts(NOW).find(c => c.contact_key === PN)
+  assert.equal(row.sent_24h, 1)
+  assert.equal(row.conversation_replies, 1)
 })
 
 test('the kill switch is off until turned on', () => {

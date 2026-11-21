@@ -23,7 +23,12 @@ export const LIMITS = {
   maxKeywords: 100,
   maxChats: 500,
   maxRegexLength: 200,
-  maxUnboundedQuantifiers: 2,
+  // Backtracking budget: the input length times the product of every
+  // repeat's maximum count. One unbounded repeat over 500 characters fits;
+  // two, or a handful of {0,40}s in a row, do not.
+  maxRegexCost: 1e7,
+  maxTemplateRegexCost: 2e7,
+  maxTemplateProbeMs: 250,
   // Keywords and exact text look at this much of a message.
   maxMatchChars: 2000,
   // A regex sees less: even a pattern that passes every check below can be
@@ -57,12 +62,17 @@ const isPlainObject = (value) => value !== null && typeof value === 'object' && 
 
 // ─── Validation ──────────────────────────────────────────────────────
 
+// Shared by every regex in the template being validated. Validation is
+// synchronous, so one module-level budget is safe.
+let regexBudget = null
+
 /**
  * Check a rule-set template and return it normalized.
  * Accepts the JSON text or an already-parsed object.
  * Returns { ok, errors: [{ path, message }], ruleSet }.
  */
 export function validateRuleSet(input) {
+  regexBudget = { cost: LIMITS.maxTemplateRegexCost, ms: LIMITS.maxTemplateProbeMs }
   const errors = []
   const fail = (path, message) => errors.push({ path, message })
 
@@ -411,7 +421,7 @@ function validateMatch(match, path, fail, { requireCondition }) {
   }
 
   if (match.regex !== undefined) {
-    const problem = regexProblem(match.regex)
+    const problem = regexProblem(match.regex, regexBudget)
     if (problem) fail(join(path, 'regex'), problem)
     else out.regex = match.regex
   }
@@ -472,10 +482,14 @@ function validateResponse(response, path, fail) {
  * JavaScript regexes have no timeout, and a slow pattern blocks the whole
  * server, ingestion included. So refuse the shapes that backtrack
  * exponentially (a quantified group that itself repeats or alternates,
- * backreferences), cap how many unbounded repeats a pattern may have, and
- * time a few hostile inputs as a last check.
+ * backreferences), bound how much any pattern can backtrack by estimating it
+ * from its repeats, and finally time hostile inputs built from the pattern's
+ * own characters.
+ *
+ * `budget` is shared across one template so many rules cannot add up to a
+ * slow template either.
  */
-export function regexProblem(pattern) {
+export function regexProblem(pattern, budget = { cost: LIMITS.maxTemplateRegexCost, ms: LIMITS.maxTemplateProbeMs }) {
   if (typeof pattern !== 'string' || !pattern) return 'Must be a non-empty pattern'
   if (pattern.length > LIMITS.maxRegexLength) return `At most ${LIMITS.maxRegexLength} characters`
   let compiled
@@ -490,33 +504,57 @@ export function regexProblem(pattern) {
   if (shape.nestedQuantifier) {
     return 'A repeated group may not contain its own repeats or alternatives, for example (a+)+ or (a|b)*. These can freeze the server'
   }
-  if (shape.unbounded > LIMITS.maxUnboundedQuantifiers) {
-    return `At most ${LIMITS.maxUnboundedQuantifiers} unbounded repeats (*, + or {n,}). Prefer keywords for loose matching`
+  if (shape.cost > LIMITS.maxRegexCost) {
+    return 'Pattern could backtrack too much on a long message. Use at most one *, + or {n,}, keep {n,m} ranges small, or use keywords instead'
   }
+  budget.cost -= shape.cost
+  if (budget.cost < 0) return 'The regexes in this template together could backtrack too much. Use fewer or simpler patterns'
 
   const n = LIMITS.maxRegexInputChars
-  const probes = ['a'.repeat(n), 'a '.repeat(n / 2), '1'.repeat(n), `${'ab'.repeat(n / 2 - 1)}!`, ' '.repeat(n)]
-  for (const probe of probes) {
+  for (const probe of regexProbes(pattern, n)) {
     const started = process.hrtime.bigint()
     compiled.test(probe)
-    if (Number(process.hrtime.bigint() - started) / 1e6 > 25) return 'Pattern is too slow on long messages'
+    const ms = Number(process.hrtime.bigint() - started) / 1e6
+    budget.ms -= ms
+    if (ms > 25) return 'Pattern is too slow on long messages'
+    if (budget.ms < 0) return 'The regexes in this template are too slow together on long messages'
   }
   return null
 }
 
+/** Long inputs made of the characters the pattern itself looks for. */
+function regexProbes(pattern, n) {
+  const literal = [...new Set(pattern.replace(/\\[dDwWsSbB]/g, '').replace(/[\\^$.*+?()[\]{}|]/g, '').toLowerCase())]
+    .filter(c => c.trim())
+    .slice(0, 8)
+  const chars = [...new Set([...literal, 'a', '1', 'é', ' '])]
+  const probes = chars.map(c => c.repeat(n))
+  if (literal.length > 1) probes.push(literal.join('').repeat(Math.ceil(n / literal.length)).slice(0, n))
+  probes.push(`${'ab'.repeat(n / 2 - 1)}!`)
+  return probes
+}
+
 function scanRegex(pattern) {
-  const result = { backreference: false, nestedQuantifier: false, unbounded: 0 }
+  const n = LIMITS.maxRegexInputChars
+  // Start positions times the product of every repeat's maximum count is a
+  // ceiling on how far a pattern without nested repeats can backtrack.
+  const result = { backreference: false, nestedQuantifier: false, cost: n }
+  const charge = (q) => { result.cost *= (q.unbounded ? n : q.max) + 1 }
   // Each open group remembers whether it holds a repeat or an alternative.
   const stack = [{ risky: false }]
   let inClass = false
 
   const quantifierAt = (i) => {
     const c = pattern[i]
-    if (c === '*' || c === '+') return { unbounded: true, length: 1 }
-    if (c === '?') return { unbounded: false, length: 1 }
+    if (c === '*' || c === '+') return { unbounded: true, max: n, length: 1 }
+    if (c === '?') return { unbounded: false, max: 1, length: 1 }
     if (c === '{') {
       const m = /^\{(\d+)(,(\d*))?\}/.exec(pattern.slice(i))
-      if (m) return { unbounded: m[2] !== undefined && m[3] === '', length: m[0].length, repeats: m[2] !== undefined || Number(m[1]) > 1 }
+      if (m) {
+        const unbounded = m[2] !== undefined && m[3] === ''
+        const max = unbounded ? n : Number(m[3] ?? m[1])
+        return { unbounded, max: Math.min(max, n), length: m[0].length, repeats: m[2] !== undefined || Number(m[1]) > 1 }
+      }
     }
     return null
   }
@@ -540,7 +578,7 @@ function scanRegex(pattern) {
       const group = stack.length > 1 ? stack.pop() : { risky: false }
       const q = quantifierAt(i + 1)
       if (q) {
-        if (q.unbounded) result.unbounded++
+        charge(q)
         if (group.risky && (q.unbounded || q.repeats)) result.nestedQuantifier = true
         stack[stack.length - 1].risky = true
         i += q.length
@@ -552,7 +590,7 @@ function scanRegex(pattern) {
     }
     const q = quantifierAt(i)
     if (q) {
-      if (q.unbounded) result.unbounded++
+      charge(q)
       stack[stack.length - 1].risky = true
       i += q.length - 1
       if (pattern[i + 1] === '?') i++
@@ -714,11 +752,16 @@ export function inWindow(minutes, window) {
 
 /**
  * Track how often a contact answers within seconds of our sends. People take
- * longer than that; another bot does not. Returns the new streak.
+ * longer than that; another bot does not. Only the first message after each
+ * of our sends is judged, so the messages our own limits swallow in between
+ * neither build nor reset the streak.
+ * Returns { streak, checkedSentAt }.
  */
-export function nextLoopStreak({ previousStreak = 0, lastSentAt, incomingAt, replyWithinSeconds }) {
-  if (!lastSentAt || incomingAt < lastSentAt) return 0
-  return incomingAt - lastSentAt <= replyWithinSeconds * 1000 ? previousStreak + 1 : 0
+export function nextLoopStreak({ previousStreak = 0, lastSentAt, checkedSentAt = null, incomingAt, replyWithinSeconds }) {
+  if (!lastSentAt || incomingAt < lastSentAt) return { streak: previousStreak, checkedSentAt }
+  if (checkedSentAt === lastSentAt) return { streak: previousStreak, checkedSentAt }
+  const fast = incomingAt - lastSentAt <= replyWithinSeconds * 1000
+  return { streak: fast ? previousStreak + 1 : 0, checkedSentAt: lastSentAt }
 }
 
 /**
