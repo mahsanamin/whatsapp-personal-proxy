@@ -2,7 +2,8 @@
 # CLI can be bundled and served to other machines from /api/cli/wpp.
 FROM node:20-alpine AS base
 WORKDIR /app
-RUN apk add --no-cache python3 make g++ curl
+# ffmpeg re-encodes voice notes to the Ogg/Opus that phones play inline.
+RUN apk add --no-cache python3 make g++ curl ffmpeg
 
 FROM base AS deps
 COPY server/package.json server/package-lock.json* ./

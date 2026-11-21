@@ -109,14 +109,13 @@ web console under **Allow list**. Do not try other routes to get around it.
 ```bash
 wpp send "Family" --file photo.jpg --caption "from the trip" --yes
 wpp send "Family" --file report.pdf --yes            # document
-wpp send "Family" --file note.ogg --voice --yes      # voice note (Opus/Ogg)
+wpp send "Family" --file note.m4a --voice --yes      # voice note (any audio format)
 wpp media get "Family" <message-id> --out photo.jpg  # download what you received
 ```
 
 A voice note is not the same as an audio file: `--voice` makes WhatsApp render
-a waveform that plays inline, and it wants Opus in Ogg. Converting is the
-caller's business (`ffmpeg -i in.m4a -c:a libopus -b:a 32k out.ogg`); this CLI
-only sends what it is given.
+a waveform that plays inline. The server converts the file to the Ogg/Opus
+format phones need, so any common audio format works.
 
 Received media is never downloaded until asked for. In a transcript it appears
 as `[image]`, `[voice note]`, `[doc]` and so on, with the message id you pass to

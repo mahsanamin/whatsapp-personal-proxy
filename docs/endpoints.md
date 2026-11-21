@@ -112,7 +112,7 @@ were explicitly allowed.
 
 | Method | Path | Scope | Notes |
 |---|---|---|---|
-| `POST` | `/api/media/send` | depends on destination | Body is the **raw file bytes**; metadata goes in the query string: `to`, `kind`, `caption`, `filename`, `mimetype`, `voice`, `gif`, `reply_to`. Up to 100 MB |
+| `POST` | `/api/media/send` | depends on destination | Body is the **raw file bytes**; metadata goes in the query string: `to`, `kind`, `caption`, `filename`, `mimetype`, `voice`, `gif`, `reply_to`. Up to 100 MB. With `voice=true` the audio is re-encoded to Ogg/Opus with ffmpeg and sent with its duration and waveform; a file ffmpeg cannot read fails with `422 TRANSCODE_FAILED` |
 | `POST` | `/api/messages/:id/react` | destination-gated | `{ emoji }` — an empty emoji removes your reaction |
 | `POST` | `/api/messages/:id/edit` | destination-gated | `{ message }` — your own messages only |
 | `DELETE` | `/api/messages/:id` | destination-gated | Deletes for everyone; your own messages only |
