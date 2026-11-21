@@ -135,4 +135,69 @@ export function runMigrations(db) {
     CREATE INDEX IF NOT EXISTS idx_messages_mentions ON messages(mentions_me) WHERE mentions_me = 1;
     CREATE INDEX IF NOT EXISTS idx_messages_quoted   ON messages(quoted_id);
   `)
+
+  // Auto-reply. The template is kept as the text that was uploaded, so a
+  // download gives back exactly what was written, in the author's own field
+  // order and formatting. The incoming message body is never copied here:
+  // messages already holds it.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS autoreply_rulesets (
+      id          TEXT PRIMARY KEY,
+      name        TEXT NOT NULL,
+      version     TEXT,
+      description TEXT,
+      template    TEXT NOT NULL,
+      mode        TEXT NOT NULL DEFAULT 'dry_run' CHECK (mode IN ('off', 'dry_run', 'live')),
+      active      INTEGER NOT NULL DEFAULT 0,
+      created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS autoreply_settings (
+      key    TEXT PRIMARY KEY,
+      value  TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS autoreply_decisions (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      at                INTEGER NOT NULL,
+      chat_jid          TEXT NOT NULL,
+      message_id        TEXT,
+      ruleset_id        TEXT,
+      ruleset_name      TEXT,
+      rule_id           TEXT,
+      action            TEXT NOT NULL,
+      reason            TEXT,
+      reply_text        TEXT,
+      reply_message_id  TEXT,
+      -- A short hash of the incoming text, so the same question is not
+      -- answered twice in one conversation. Never the text itself.
+      text_hash         TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_autoreply_decisions_chat ON autoreply_decisions(chat_jid, at);
+    CREATE INDEX IF NOT EXISTS idx_autoreply_decisions_at   ON autoreply_decisions(at);
+    CREATE INDEX IF NOT EXISTS idx_autoreply_decisions_reply ON autoreply_decisions(reply_message_id);
+
+    -- At most one answer per message, even when WhatsApp redelivers it.
+    CREATE TABLE IF NOT EXISTS autoreply_processed (
+      message_id  TEXT PRIMARY KEY,
+      at          INTEGER NOT NULL
+    );
+
+    -- Per-contact state: mutes, the current conversation, and the signals
+    -- that spot floods and other bots. Keyed by the chat's canonical JID, or
+    -- "<group>|<sender>" for one person inside a group.
+    CREATE TABLE IF NOT EXISTS autoreply_contacts (
+      contact_key              TEXT PRIMARY KEY,
+      muted_until              INTEGER,
+      mute_reason              TEXT,
+      last_manual_at           INTEGER,
+      last_incoming_at         INTEGER,
+      conversation_started_at  INTEGER,
+      loop_streak              INTEGER NOT NULL DEFAULT 0,
+      last_sent_at             INTEGER,
+      loop_checked_sent_at     INTEGER,
+      updated_at               INTEGER NOT NULL
+    );
+  `)
 }

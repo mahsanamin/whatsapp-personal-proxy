@@ -35,7 +35,7 @@ is right in development and production.
 
 Valid scopes: `personal:send`, `others:send`, `others:whitelist:read`,
 `others:whitelist:manage`, `groups:send`, `channels:read`, `channels:summarize`,
-`tabs:manage`, `wa:admin`.
+`tabs:manage`, `wa:admin`, `autoreply:manage`.
 
 Tokens are SHA-256 hashed at rest, `sk_` prefix, shown once at creation. Admin password
 comparison is constant-time via `crypto.timingSafeEqual`.

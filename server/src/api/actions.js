@@ -5,6 +5,7 @@ import { refuseIfNotAllowed } from '../util/sendPermission.js'
 import { loadMessageKey, loadMessageMeta } from '../util/messageRef.js'
 import { expandJids } from '../db/lidmap.js'
 import { ensureConnected } from '../wa/client.js'
+import { sendMessage } from '../wa/send.js'
 
 const sendRateLimit = config.rateLimitSend > 0
   ? { rateLimit: { max: config.rateLimitSend, timeWindow: '1 minute' } }
@@ -30,7 +31,7 @@ export default async function actionRoutes(fastify) {
     const sock = ensureConnected()
     if (!sock) return reply.code(503).send({ error: 'WhatsApp not connected', code: 'WA_DISCONNECTED' })
 
-    await sock.sendMessage(meta.jid, { react: { text: emoji, key } })
+    await sendMessage(sock, meta.jid, { react: { text: emoji, key } })
     return { ok: true, id, emoji, removed: emoji === '' }
   })
 
@@ -58,7 +59,7 @@ export default async function actionRoutes(fastify) {
     if (!sock) return reply.code(503).send({ error: 'WhatsApp not connected', code: 'WA_DISCONNECTED' })
 
     try {
-      const result = await sock.sendMessage(meta.jid, { text: message, edit: key })
+      const result = await sendMessage(sock, meta.jid, { text: message, edit: key })
       db.prepare('UPDATE messages SET body = ? WHERE id = ?').run(message, id)
       return { ok: true, id, messageId: result?.key?.id ?? id }
     } catch (err) {
@@ -86,7 +87,7 @@ export default async function actionRoutes(fastify) {
     const sock = ensureConnected()
     if (!sock) return reply.code(503).send({ error: 'WhatsApp not connected', code: 'WA_DISCONNECTED' })
 
-    await sock.sendMessage(meta.jid, { delete: key })
+    await sendMessage(sock, meta.jid, { delete: key })
     db.prepare("UPDATE messages SET body = NULL, type = 'deleted' WHERE id = ?").run(id)
     return { ok: true, id, deleted: true }
   })

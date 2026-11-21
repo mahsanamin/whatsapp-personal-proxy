@@ -92,3 +92,20 @@ test('PERSONAL_NUMBERS is optional because the linked account is detected', () =
     'an empty PERSONAL_NUMBERS setting would prevent the server from starting',
   )
 })
+
+test('an API key can never make the auto-replier send', () => {
+  const routes = read('../src/api/autoreply.js')
+  const settings = routes.slice(routes.indexOf("fastify.put('/autoreply/settings'"), routes.indexOf("fastify.put('/autoreply/settings'") + 200)
+  assert.ok(settings.includes('requireSession'), 'the auto-reply kill switch must be console only')
+  assert.ok(routes.includes('stateChangeRefusal('), 'putting a rule set live must go through the console-only check')
+  const unmute = routes.slice(routes.indexOf("fastify.delete('/autoreply/contacts/:jid/mute'"), routes.indexOf("fastify.delete('/autoreply/contacts/:jid/mute'") + 120)
+  assert.ok(unmute.includes('requireSession'), 'lifting a mute lets replies flow again, so it must be console only')
+  assert.ok(routes.includes('isSession: Boolean(request.session?.authenticated)'), 'the live check must look at the console session')
+
+  const engine = read('../src/wa/autoreply.js')
+  const sendAt = engine.indexOf('await sendMessage(')
+  const checkAt = engine.indexOf('preSendRefusal(row, chatJid)')
+  assert.ok(checkAt > -1 && sendAt > checkAt, 'the scope and kill switch must be re-checked right before every auto-reply')
+  assert.ok(!engine.includes('normalized.body, {') && engine.includes('sendMessage(sock, chatJid,'),
+    'an auto-reply goes back to the chat it came from, never to an address taken from the message')
+})

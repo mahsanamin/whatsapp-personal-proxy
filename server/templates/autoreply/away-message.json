@@ -1,0 +1,32 @@
+{
+  "format": 1,
+  "name": "Away message",
+  "version": "1.0.0",
+  "description": "Outside working hours, tell people on the allow list that I will reply later. Once per chat per conversation, never in groups.",
+  "scope": {
+    "allowlist": true,
+    "all_dms": false,
+    "chats": [],
+    "blocklist": []
+  },
+  "options": {
+    "timezone": "Asia/Singapore",
+    "active_hours": { "start": "19:00", "end": "09:00" },
+    "cooldown_minutes": 720,
+    "pause_after_manual_reply_minutes": 60,
+    "max_replies_per_contact_per_hour": 1,
+    "max_replies_per_contact_per_day": 2,
+    "conversation": { "gap_minutes": 30, "max_replies": 1, "backoff_base_minutes": 1 },
+    "flood": { "max_messages": 8, "window_seconds": 60, "mute_minutes": 360 },
+    "loop": { "reply_within_seconds": 3, "streak": 3, "mute_minutes": 1440 }
+  },
+  "rules": [],
+  "fallback": {
+    "id": "away",
+    "match": { "types": ["text", "image", "video", "doc", "voice", "audio"] },
+    "response": {
+      "type": "text",
+      "text": "Hi {first_name}, I'm away right now ({time} here in Singapore). I'll get back to you tomorrow morning."
+    }
+  }
+}

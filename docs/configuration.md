@@ -61,6 +61,20 @@ and reports whatever WhatsApp would no longer supply instead of failing.
 | `RATE_LIMIT_LOGIN` | `10` | Console login attempts per minute per IP. `0` disables |
 | `RATE_LIMIT_SEND` | `60` | Calls per minute per IP across the three send endpoints. `0` disables |
 
+## Auto-reply
+
+Server caps for `docs/autoreply.md`. A rule set can be stricter, never looser.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AUTOREPLY_MIN_GAP_S` | `60` | Minimum seconds between two auto-replies in one chat. Cannot go below 60 |
+| `AUTOREPLY_MAX_PER_CHAT_PER_HOUR` | `3` | Auto-replies per contact per hour |
+| `AUTOREPLY_MAX_PER_CHAT_PER_DAY` | `10` | Auto-replies per contact per 24 hours |
+| `AUTOREPLY_MAX_PER_HOUR` | `30` | Auto-replies per hour across all chats |
+| `AUTOREPLY_MAX_AGE_S` | `180` | Messages older than this are treated as history and never answered (30 to 600) |
+
+Auto-reply itself is switched on from the console, not here, and is off on a new install.
+
 ## Paths
 
 Set by `docker-compose.yml`; only change them if you are running outside Docker.

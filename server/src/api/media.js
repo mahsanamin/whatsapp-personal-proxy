@@ -5,6 +5,7 @@ import { refuseIfNotAllowed } from '../util/sendPermission.js'
 import { toJid, isGroup } from '../util/jid.js'
 import { ensureConnected, recordSentMessage } from '../wa/client.js'
 import { prepareVoiceNote } from '../util/voiceNote.js'
+import { sendMessage } from '../wa/send.js'
 import { config } from '../config.js'
 
 // WhatsApp's own ceiling is ~16MB for inline media and ~100MB for documents.
@@ -167,7 +168,7 @@ export default async function mediaRoutes(fastify) {
     try {
       const result = voiceNote
         ? await sendVoiceNote(sock, jid, voiceNote, options)
-        : await sock.sendMessage(jid, content, options)
+        : await sendMessage(sock, jid, content, options)
       recordSentMessage(result)
       return {
         ok: true,

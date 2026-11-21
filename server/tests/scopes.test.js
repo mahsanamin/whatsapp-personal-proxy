@@ -16,6 +16,7 @@ const EXPECTED = [
   'channels:summarize',
   'tabs:manage',
   'wa:admin',
+  'autoreply:manage',
 ]
 
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8')

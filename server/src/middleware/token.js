@@ -11,6 +11,7 @@ const VALID_SCOPES = [
   'channels:summarize',
   'tabs:manage',
   'wa:admin',
+  'autoreply:manage',
 ]
 
 export { VALID_SCOPES }
