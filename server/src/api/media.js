@@ -3,6 +3,7 @@ import { loadRawMessage } from '../util/messageRef.js'
 import { refuseIfNotAllowed } from '../util/sendPermission.js'
 import { toJid, isGroup } from '../util/jid.js'
 import { ensureConnected, recordSentMessage } from '../wa/client.js'
+import { sendMessage } from '../wa/send.js'
 import { config } from '../config.js'
 
 // WhatsApp's own ceiling is ~16MB for inline media and ~100MB for documents.
@@ -125,7 +126,7 @@ export default async function mediaRoutes(fastify) {
     }
 
     try {
-      const result = await sock.sendMessage(jid, content, options)
+      const result = await sendMessage(sock, jid, content, options)
       recordSentMessage(result)
       return {
         ok: true,

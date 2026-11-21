@@ -11,6 +11,7 @@ import { SqliteSessionStore } from './db/sessionStore.js'
 import { repairMessageTimestamps, repairUnknownMessages } from './db/repair.js'
 import { requireSession } from './middleware/session.js'
 import { createWAClient } from './wa/client.js'
+import { sendMessage } from './wa/send.js'
 
 // Route imports
 import authRoutes from './api/auth.js'
@@ -201,7 +202,7 @@ fastify.post('/send', {
   if (!sock) {
     return reply.code(503).send({ error: 'WhatsApp not connected', code: 'WA_DISCONNECTED' })
   }
-  const result = await sock.sendMessage(jid, { text: message })
+  const result = await sendMessage(sock, jid, { text: message })
   return { ok: true, messageId: result.key.id }
 })
 

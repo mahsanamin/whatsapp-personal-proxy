@@ -1,6 +1,7 @@
 import { refuseIfNotAllowed } from '../util/sendPermission.js'
 import { loadRawMessage } from '../util/messageRef.js'
 import { ensureConnected, recordSentMessage } from '../wa/client.js'
+import { sendMessage } from '../wa/send.js'
 import { config } from '../config.js'
 
 export const sendRateLimit = config.rateLimitSend > 0
@@ -32,7 +33,7 @@ export async function sendText(request, reply, jid, route = null) {
     options.quoted = quoted
   }
 
-  const result = await sock.sendMessage(jid, { text: message }, options)
+  const result = await sendMessage(sock, jid, { text: message }, options)
   recordSentMessage(result)
   return { ok: true, messageId: result.key.id, to: jid, ...(replyTo ? { reply_to: replyTo } : {}) }
 }
