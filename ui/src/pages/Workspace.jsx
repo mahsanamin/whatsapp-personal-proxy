@@ -25,6 +25,18 @@ function timeAgo(ts) {
   return new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
+// Chats whose picture failed recently, so scrolling a row back into view or
+// re-rendering the list does not ask again. Expires so a picture that was
+// missing only because WhatsApp was reconnecting turns up later.
+const PICTURE_RETRY_MS = 10 * 60 * 1000
+const pictureMisses = new Map()
+
+function hasPicture(jid) {
+  if (!jid || !/@(s\.whatsapp\.net|lid|g\.us)$/.test(jid)) return false
+  const missedAt = pictureMisses.get(jid)
+  return !missedAt || Date.now() - missedAt > PICTURE_RETRY_MS
+}
+
 function Avatar({ name, jid, size = 'md' }) {
   const label = name || formatJid(jid)
   const initial = label.replace(/^\+/, '').charAt(0).toUpperCase()
@@ -32,12 +44,37 @@ function Avatar({ name, jid, size = 'md' }) {
   const idx = (jid || '').split('').reduce((a, c) => a + c.charCodeAt(0), 0) % colors.length
   const sizeClass = size === 'sm' ? 'w-8 h-8 text-xs' : 'w-10 h-10 text-sm'
   const isGroup = jid?.endsWith('@g.us')
+  const [loaded, setLoaded] = useState(false)
+  const [failed, setFailed] = useState(() => !hasPicture(jid))
+
+  useEffect(() => {
+    setLoaded(false)
+    setFailed(!hasPicture(jid))
+  }, [jid])
 
   return (
-    <div className={`${sizeClass} ${colors[idx]} rounded-full flex items-center justify-center font-semibold text-white flex-shrink-0`}>
+    <div className={`${sizeClass} ${colors[idx]} relative overflow-hidden rounded-full flex items-center justify-center font-semibold text-white flex-shrink-0`}>
       {isGroup ? (
         <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v1h8v-1zM6 8a2 2 0 11-4 0 2 2 0 014 0zM16 18v-1a5.97 5.97 0 00-.75-2.906A3.005 3.005 0 0119 17v1h-3zM4.75 14.094A5.97 5.97 0 004 17v1H1v-1a3 3 0 013.75-2.906z" /></svg>
       ) : initial}
+      {!failed && (
+        // Lazy, so only rows on screen ask the server, which in turn is the
+        // only thing that asks WhatsApp. The initials stay underneath until
+        // the image has actually loaded.
+        <img
+          src={`/api/channels/${encodeURIComponent(jid)}/picture`}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          onLoad={() => setLoaded(true)}
+          onError={() => {
+            pictureMisses.set(jid, Date.now())
+            setFailed(true)
+          }}
+          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-150 ${loaded ? 'opacity-100' : 'opacity-0'}`}
+        />
+      )}
     </div>
   )
 }

@@ -109,7 +109,7 @@ Everything is under `./data/` on the host, bind-mounted into the containers:
 
 ```
 data/
-├── db/wpp.db        SQLite (messages, channel_meta, tokens, whitelist, tabs, lid_map)
+├── db/wpp.db        SQLite (messages, channel_meta, tokens, whitelist, tabs, lid_map, profile_pictures)
 ├── wa-session/      Baileys auth state — treat as a credential
 └── media/           Only files explicitly saved
 ```
@@ -122,6 +122,17 @@ Media is never downloaded automatically. Messages store the mime type, size, sha
 the encrypted media key; the bytes are fetched from WhatsApp only when a caller asks for
 that specific message, and written to disk only via the explicit `.../media/save` route.
 This keeps the disk footprint of a busy account near zero.
+
+Profile pictures follow the same rule. `GET /api/channels/:jid/picture` asks WhatsApp
+only when the console actually displays an avatar, and the UI loads avatars lazily, so
+only rows on screen ask. The preview-size bytes (a few KB) go into `profile_pictures`
+for 24 hours, and so does "no picture visible", so privacy-hidden contacts are not queried
+on every render. A transient failure is retried after 10 minutes and keeps serving the
+previous picture meanwhile. When WhatsApp announces a picture change (`contacts.update`
+with `imgUrl`), the row is dropped right away, so the 24 hours only limits how long a
+missed announcement can leave an old picture showing. At most four picture queries run
+at once (`wa/pictures.js`). The client tries the canonical JID first, then the chat's
+other addresses from `expandJids()`.
 
 ## Event flow
 
