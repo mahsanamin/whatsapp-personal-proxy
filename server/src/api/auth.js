@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import { config } from '../config.js'
 import { identifyCaller } from '../middleware/token.js'
+import { sessionMaxAgeMs } from '../util/remember.js'
 import {
   getSock,
   isLinked,
@@ -23,10 +24,15 @@ export default async function authRoutes(fastify) {
       ? { rateLimit: { max: config.rateLimitLogin, timeWindow: '1 minute' } }
       : {},
   }, async (request, reply) => {
-    const { username, password } = request.body || {}
+    const { username, password, remember } = request.body || {}
 
     if (!username || !password) {
       return reply.code(400).send({ error: 'Username and password required', code: 'BAD_INPUT' })
+    }
+
+    const maxAgeMs = sessionMaxAgeMs(remember)
+    if (maxAgeMs === null) {
+      return reply.code(400).send({ error: 'remember must be one of 30d, 60d, forever', code: 'BAD_INPUT' })
     }
 
     if (!constantTimeEqual(username, config.adminUser) || !constantTimeEqual(password, config.adminPass)) {
@@ -34,6 +40,9 @@ export default async function authRoutes(fastify) {
     }
 
     request.session.authenticated = true
+    // Stored with the session, so rolling renewal and the SQLite expiry both
+    // keep using the lifetime chosen here.
+    request.session.cookie.maxAge = maxAgeMs
     return { ok: true }
   })
 

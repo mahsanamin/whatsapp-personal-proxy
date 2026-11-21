@@ -52,7 +52,7 @@ so the CLI can route a send without a wasted round trip.
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
-| `POST` | `/api/auth/login` | none | `{ username, password }`. Rate limited by `RATE_LIMIT_LOGIN` |
+| `POST` | `/api/auth/login` | none | `{ username, password, remember? }`. `remember` is `30d`, `60d` or `forever` (400 days, the browser cap); omitted means 7 days. Sessions renew on use. Rate limited by `RATE_LIMIT_LOGIN` |
 | `POST` | `/api/auth/logout` | session | |
 
 ## Linking WhatsApp

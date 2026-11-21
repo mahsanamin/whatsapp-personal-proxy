@@ -8,6 +8,7 @@ import { EventEmitter } from 'node:events'
 import { config } from './config.js'
 import { db } from './db/index.js'
 import { SqliteSessionStore } from './db/sessionStore.js'
+import { DEFAULT_SESSION_MS } from './util/remember.js'
 import { repairMessageTimestamps, repairUnknownMessages } from './db/repair.js'
 import { requireSession } from './middleware/session.js'
 import { createWAClient } from './wa/client.js'
@@ -68,7 +69,8 @@ await fastify.register(cors, {
 
 await fastify.register(cookie)
 
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
+// Login may lengthen this per session ("remember me", api/auth.js).
+const SESSION_TTL_MS = DEFAULT_SESSION_MS
 
 await fastify.register(session, {
   secret: config.jwtSecret,
