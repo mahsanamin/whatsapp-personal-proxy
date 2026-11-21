@@ -107,6 +107,17 @@ export function runMigrations(db) {
       expires_at  INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+
+    -- Profile pictures, fetched only when the console displays one. 'none'
+    -- caches WhatsApp's "no picture you may see" so privacy-hidden contacts
+    -- are not queried on every render; 'error' is a short-lived transient miss.
+    CREATE TABLE IF NOT EXISTS profile_pictures (
+      jid         TEXT PRIMARY KEY,
+      status      TEXT NOT NULL CHECK (status IN ('ok', 'none', 'error')),
+      image       BLOB,
+      mime        TEXT,
+      fetched_at  INTEGER NOT NULL
+    );
   `)
 
   // Keep the read cursor separately from outgoing delivery receipts.

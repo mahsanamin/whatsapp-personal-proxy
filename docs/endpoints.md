@@ -85,6 +85,7 @@ so the CLI can route a send without a wasted round trip.
 |---|---|---|---|
 | `GET` | `/api/channels` | `channels:read` | Query: `type=dm\|group\|channel`, `search`, `tab`, `archived`, `limit` |
 | `GET` | `/api/channels/:jid` | `channels:read` | One chat's metadata |
+| `GET` | `/api/channels/:jid/picture` | `channels:read` | The chat's WhatsApp profile picture (preview size) as image bytes. People and groups only. Fetched on demand and cached server-side for 24h, including "no picture"; `404 NOT_FOUND` when none is visible, `503 WA_DISCONNECTED` when nothing is cached and WhatsApp is down, `502 WA_FETCH_FAILED` on a transient failure |
 | `GET` | `/api/groups` | `channels:read` | Groups from WhatsApp live, not the mirror. Requires an open link |
 | `GET` | `/api/channels/:jid/messages` | `channels:read` | Query: `limit` (max 200), `before`, `after`, `type`. Newest first. Reads across LID and phone-number JIDs |
 | `GET` | `/api/messages/search` | `channels:read` | Query: `q` (required), `jid`, `type`, `limit` |

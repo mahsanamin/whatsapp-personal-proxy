@@ -16,6 +16,7 @@ import { saveContactName, repairContactNames } from '../db/contactNames.js'
 import { applyUnreadUpdate, unreadState, recordUnreadMessage, applyUnreadReceipt } from '../db/unread.js'
 import { incomingContact } from '../util/contactIdentity.js'
 import { jidUser } from '../util/jid.js'
+import { forgetProfilePicture } from './pictures.js'
 
 const MAX_RETRIES = 10
 let retries = 0
@@ -261,6 +262,11 @@ export async function createWAClient(sessionPath, eventBus) {
 
   // Process a contact object from Baileys (contacts.upsert / messaging-history.set)
   function processContact(contact) {
+    // WhatsApp announces a new or removed picture as imgUrl 'changed' /
+    // 'removed'. Dropping the cache here is what lets the TTL be a full day.
+    if (contact.imgUrl !== undefined) {
+      for (const jid of [contact.id, contact.lid, contact.phoneNumber]) forgetProfilePicture(jid)
+    }
     // Address book name takes priority over pushName
     const name = contact.name || contact.notify || contact.verifiedName
     if (name && contact.id) upsertContact(contact.id, name, contact.name ? 3 : 1)
