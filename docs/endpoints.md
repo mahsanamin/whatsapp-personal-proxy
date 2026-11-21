@@ -36,6 +36,7 @@ Common codes: `BAD_INPUT`, `UNAUTHORIZED`, `INVALID_TOKEN`, `MISSING_SCOPE`, `NO
 | `channels:summarize` | Reserved for the LLM summary endpoint |
 | `tabs:manage` | Create, rename, and delete tabs |
 | `wa:admin` | Force reconnect and QR refresh |
+| `autoreply:manage` | Manage auto-reply rule sets, test them, read the decision log, mute contacts. Cannot put a rule set live or turn on the kill switch |
 
 ## Health and identity
 

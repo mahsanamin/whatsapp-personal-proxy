@@ -28,6 +28,7 @@ import eventRoutes from './api/events.js'
 import briefRoutes from './api/brief.js'
 import mediaRoutes from './api/media.js'
 import actionRoutes from './api/actions.js'
+import autoreplyRoutes from './api/autoreply.js'
 import wsRoutes from './ws/index.js'
 
 const fastify = Fastify({
@@ -115,6 +116,7 @@ await fastify.register(eventRoutes)
 await fastify.register(briefRoutes)
 await fastify.register(mediaRoutes)
 await fastify.register(actionRoutes)
+await fastify.register(autoreplyRoutes)
 await fastify.register(wsRoutes)
 
 // Force resolve unnamed contacts and groups.

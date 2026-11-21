@@ -16,6 +16,7 @@ import { saveContactName, repairContactNames } from '../db/contactNames.js'
 import { applyUnreadUpdate, unreadState, recordUnreadMessage, applyUnreadReceipt } from '../db/unread.js'
 import { incomingContact } from '../util/contactIdentity.js'
 import { jidUser } from '../util/jid.js'
+import { onMessageIngested } from './autoreply.js'
 
 const MAX_RETRIES = 10
 let retries = 0
@@ -407,6 +408,10 @@ export async function createWAClient(sessionPath, eventBus) {
           canonical_jid: canonicalJid(normalized.jid),
           from_name: resolveNames([normalized.from_jid]).get(normalized.from_jid) || null,
         })
+        // Runs later on its own queue; it decides for itself whether this is a
+        // live message it may answer, so history and catch-up pass through
+        // here harmlessly.
+        onMessageIngested(msg, normalized, type)
       } catch (err) {
         // Never crash on a bad message
       }
@@ -440,7 +445,7 @@ export async function createWAClient(sessionPath, eventBus) {
  * the catch around ingestion — which is why the mirror held text and stickers
  * (the one media branch that never sets a size) and nothing else.
  */
-function toNumber(value) {
+export function toNumber(value) {
   if (value === null || value === undefined) return null
   if (typeof value === 'number') return Number.isFinite(value) ? value : null
   if (typeof value === 'bigint') return Number(value)

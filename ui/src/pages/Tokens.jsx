@@ -9,6 +9,7 @@ const SCOPE_GROUPS = {
   'Chats & Messages': ['channels:read', 'channels:summarize'],
   Tabs: ['tabs:manage'],
   Admin: ['wa:admin'],
+  'Auto-reply': ['autoreply:manage'],
 }
 
 const SCOPE_LABELS = {
@@ -21,6 +22,7 @@ const SCOPE_LABELS = {
   'channels:summarize': 'Summarize chats & messages',
   'tabs:manage': 'Manage tabs',
   'wa:admin': 'Manage WhatsApp connection',
+  'autoreply:manage': 'Manage auto-reply rule sets (never live)',
 }
 
 export default function Tokens() {
