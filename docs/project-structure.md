@@ -13,7 +13,7 @@ whatsapp-personal-proxy/
 │
 ├── nginx/nginx.conf            Edge proxy: /api/* and /ws → server, /* → ui
 │
-├── server/                     Node 20 + Fastify + Baileys + SQLite
+├── server/                     Node 24 + Fastify + Baileys + SQLite
 │   ├── Dockerfile              Built from the repo root so `wpp` can be bundled
 │   ├── src/
 │   │   ├── index.js            Entrypoint: plugins, route registration, listen

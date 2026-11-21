@@ -44,7 +44,7 @@ flowchart LR
 
 | Service | Stack | Listens |
 |---|---|---|
-| `wpp-server` | Node 20, Fastify, Baileys, better-sqlite3 | 3901 (container) |
+| `wpp-server` | Node 24, Fastify, Baileys, better-sqlite3 | 3901 (container) |
 | `wpp-ui` | React 18, Vite, Tailwind | 5973 (container) |
 | `wpp-nginx` | nginx:alpine | 80 → host `${BIND_HOST}:3900` |
 

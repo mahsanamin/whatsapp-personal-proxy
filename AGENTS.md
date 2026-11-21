@@ -10,7 +10,7 @@ and the linked device stops working, so check this before other work. Node is no
 host, so run it in a container:
 
 ```bash
-docker run --rm node:20-alpine npm view @whiskeysockets/baileys versions --json
+docker run --rm node:24-alpine npm view @whiskeysockets/baileys versions --json
 ```
 
 Ignore anything with a pre-release suffix (`-rc`, `-beta`, ...), and ignore 6.17.16,

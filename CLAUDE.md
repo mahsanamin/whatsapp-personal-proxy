@@ -16,7 +16,7 @@ linked to); every other machine drives it through the `wpp` CLI over REST.
 
 ## Architecture
 
-- **server/** — Node 20 + Fastify + Baileys + SQLite (better-sqlite3)
+- **server/** — Node 24 + Fastify + Baileys + SQLite (better-sqlite3)
 - **ui/** — React 18 + Vite + Tailwind (dark terminal-inspired theme)
 - **wpp** — the CLI: one Python file, standard library only, bundled into the server
   image and served at `/api/cli/wpp` so a new machine bootstraps with one `curl`
