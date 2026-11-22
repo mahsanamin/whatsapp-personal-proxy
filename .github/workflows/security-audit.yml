@@ -40,7 +40,9 @@ jobs:
 
   tests:
     name: Tests (server + CLI)
-    runs-on: ubuntu-latest
+    # Pinned: the CLI promises Python 3.9, and setup-python has no 3.9 build for
+    # the Ubuntu 26.04 image that ubuntu-latest now points at.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
