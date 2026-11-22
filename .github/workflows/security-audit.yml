@@ -15,7 +15,7 @@ jobs:
     name: Server (npm audit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -28,7 +28,7 @@ jobs:
     name: UI (npm audit + build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -44,7 +44,7 @@ jobs:
     # the Ubuntu 26.04 image that ubuntu-latest now points at.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -69,7 +69,7 @@ jobs:
     name: Docker compose build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Stub .env so config validation doesn't abort the build
         run: |
           cat > .env <<'EOF'
