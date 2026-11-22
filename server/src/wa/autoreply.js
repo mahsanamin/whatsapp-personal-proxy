@@ -5,9 +5,10 @@ import { expandJids, canonicalJid, resolveNames } from '../db/lidmap.js'
 import {
   isEnabled, loadActiveRuleSet, isAllowlisted, claimMessage, recordManualReply,
   isBotReply, logDecision, contactSnapshot, saveContact, prune, getServerLimits,
+  recordDecryptFailure, wasDecryptFailure, pruneDecryptFailures,
 } from '../db/autoreply.js'
-import { decide, liveMessageRefusal, isManualReply, scopeRefusal } from '../util/autoreply.js'
-import { ensureConnected, isOwnJid, recordSentMessage, toNumber } from './client.js'
+import { decide, liveMessageRefusal, answerRefusal, isDecryptFailure, isManualReply, scopeRefusal } from '../util/autoreply.js'
+import { ensureConnected, isOwnJid, recordSentMessage, toNumber, unwrapMessage } from './client.js'
 import { sendMessage } from './send.js'
 
 const logger = pino({ level: config.waLogLevel })
@@ -24,6 +25,25 @@ function rememberBotMessage(id, nowMs) {
   }
 }
 
+try {
+  pruneDecryptFailures(Date.now())
+} catch (err) {
+  logger.warn({ err: err?.message }, 'could not prune decrypt failures')
+}
+
+/**
+ * Called by ingestion for every upserted message, before it is normalized:
+ * the stub left by a failed decryption is dropped by normalization, and its
+ * id has to be on record before the resend arrives. Never throws.
+ */
+export function noteDecryptFailure(raw) {
+  try {
+    if (isDecryptFailure(raw)) recordDecryptFailure(raw.key.id, raw.key.remoteJid, Date.now())
+  } catch (err) {
+    logger.warn({ err: err?.message, id: raw?.key?.id }, 'could not record decrypt failure')
+  }
+}
+
 // One message at a time, so a burst from one chat cannot read the limits
 // before the first reply has been logged and answer several times.
 let queue = Promise.resolve()
@@ -33,14 +53,15 @@ let queue = Promise.resolve()
  * ingestion: the work runs later, on a queue.
  */
 export function onMessageIngested(raw, normalized, upsertType) {
+  const receivedAtMs = Date.now()
   setImmediate(() => {
     queue = queue
-      .then(() => handle(raw, normalized, upsertType))
+      .then(() => handle(raw, normalized, upsertType, receivedAtMs))
       .catch(err => logger.warn({ err: err?.message, id: normalized?.id }, 'auto-reply failed'))
   })
 }
 
-async function handle(raw, normalized, upsertType) {
+async function handle(raw, normalized, upsertType, receivedAtMs) {
   const nowMs = Date.now()
   const sentAtSeconds = toNumber(raw?.messageTimestamp)
   // Read per message, so a limit changed in the console applies without a restart.
@@ -57,7 +78,7 @@ async function handle(raw, normalized, upsertType) {
   }
 
   if (!isEnabled()) return
-  if (liveMessageRefusal({ upsertType, message: normalized, sentAtSeconds, nowMs, maxAgeSeconds })) return
+  if (liveMessageRefusal({ upsertType, message: normalized, raw })) return
 
   const active = loadActiveRuleSet()
   if (!active?.ruleSet) return
@@ -78,6 +99,18 @@ async function handle(raw, normalized, upsertType) {
   // Other out-of-scope chats are not logged: that would record every message
   // from everyone.
   if (outOfScope) return
+
+  // Every condition for a clear, live message, checked before any rule.
+  const refused = answerRefusal({
+    message: normalized,
+    content: unwrapMessage(raw?.message),
+    redelivered: wasDecryptFailure(normalized.id),
+    sentAtSeconds, receivedAtMs, nowMs, maxAgeSeconds,
+  })
+  if (refused) {
+    logDecision({ at: nowMs, chat_jid: chatJid, message_id: normalized.id, ruleset_id: row.id, ruleset_name: row.name, action: 'skipped', reason: refused })
+    return
+  }
 
   const action = row.mode === 'live' ? 'sent' : 'dry_run'
   const senderName = resolveNames([normalized.from_jid]).get(normalized.from_jid) || null

@@ -184,6 +184,17 @@ export function runMigrations(db) {
       at          INTEGER NOT NULL
     );
 
+    -- Ids of messages that failed to decrypt. The sender's device resends
+    -- them later under the same id with a fresh timestamp, so they would look
+    -- live. Auto-reply never answers an id listed here. Kept in the database
+    -- so a restart between the failure and the resend does not lose it.
+    CREATE TABLE IF NOT EXISTS decrypt_failures (
+      message_id  TEXT PRIMARY KEY,
+      chat_jid    TEXT,
+      failed_at   INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_decrypt_failures_at ON decrypt_failures(failed_at);
+
     -- Per-contact state: mutes, the current conversation, and the signals
     -- that spot floods and other bots. Keyed by the chat's canonical JID, or
     -- "<group>|<sender>" for one person inside a group.

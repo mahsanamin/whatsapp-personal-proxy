@@ -19,7 +19,7 @@ import { jidUser } from '../util/jid.js'
 import { createConnectionGate } from '../util/connectionGate.js'
 import { describeContacts } from '../util/vcard.js'
 import { forgetProfilePicture } from './pictures.js'
-import { onMessageIngested } from './autoreply.js'
+import { onMessageIngested, noteDecryptFailure } from './autoreply.js'
 
 const MAX_RETRIES = 10
 // A linked account that has not reached 'open' by now is stuck, not slow.
@@ -434,6 +434,10 @@ export async function createWAClient(sessionPath, eventBus) {
         // Extract pushName to resolve contact names
         const contact = incomingContact(msg)
         if (contact) upsertContact(contact.jid, contact.name)
+
+        // Before normalization, which drops the stub: auto-reply must know
+        // this id failed, so the resend that follows is never answered.
+        noteDecryptFailure(msg)
 
         const normalized = normalizeMessage(msg)
         if (!normalized) continue

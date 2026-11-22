@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
-  validateRuleSet, regexProblem, findMatchingRule, scopeRefusal, liveMessageRefusal,
+  validateRuleSet, regexProblem, findMatchingRule, scopeRefusal, liveMessageRefusal, answerRefusal, isDecryptFailure, CIPHERTEXT_STUB,
   isManualReply, localMinutes, inWindow, decide, renderResponse, cleanName,
   stateChangeRefusal, nextLoopStreak, conversationStart, backoffMs, effectiveLimits,
   textHash, LIMITS, HANDOFF_RULE_ID,
@@ -250,32 +250,115 @@ test('own chats, broadcasts and newsletters are never in scope', () => {
 
 const live = (overrides = {}) => liveMessageRefusal({
   upsertType: 'notify',
-  message: { id: 'm1', jid: PN, type: 'text', is_from_me: 0 },
-  sentAtSeconds: NOON_SGT / 1000 - 5,
+  message: { id: 'm1', jid: PN, type: 'text', body: 'hi', is_from_me: 0 },
+  raw: { key: { id: 'm1', remoteJid: PN }, message: { conversation: 'hi' } },
+  ...overrides,
+})
+
+test('a notify message from someone else goes on to the gate', () => {
+  assert.equal(live(), null)
+})
+
+test('history, catch-up and offline delivery never qualify', () => {
+  // Baileys upserts offline stanzas as 'append', and history sync never as 'notify'.
+  assert.equal(live({ upsertType: 'append' }), 'not_live')
+  assert.equal(live({ upsertType: undefined }), 'not_live')
+})
+
+test('the stub of a failed decryption never qualifies', () => {
+  const stub = { key: { id: 'm1', remoteJid: PN }, messageStubType: CIPHERTEXT_STUB, messageStubParameters: ['No matching sessions found for message'] }
+  assert.equal(live({ raw: stub, message: null }), 'decrypt_failed')
+  assert.equal(live({ raw: stub }), 'decrypt_failed', 'even if normalization kept something')
+})
+
+test('own messages, broadcasts and unparsed payloads never qualify', () => {
+  assert.equal(live({ message: { jid: PN, type: 'text', is_from_me: 1 } }), 'from_me')
+  assert.equal(live({ message: { jid: 'status@broadcast', type: 'text', is_from_me: 0 } }), 'broadcast')
+  assert.equal(live({ message: { jid: '1203630001@newsletter', type: 'text', is_from_me: 0 } }), 'newsletter')
+  assert.equal(live({ message: { type: 'text', is_from_me: 0 } }), 'no_chat')
+  assert.equal(live({ message: null }), 'unparsed')
+})
+
+test('the stub type matches Baileys', async () => {
+  const { proto } = await import('@whiskeysockets/baileys')
+  assert.equal(CIPHERTEXT_STUB, proto.WebMessageInfo.StubType.CIPHERTEXT)
+  assert.equal(isDecryptFailure({ key: { id: 'x' }, messageStubType: CIPHERTEXT_STUB }), true)
+  assert.equal(isDecryptFailure({ key: { id: 'x' }, message: { conversation: 'hi' } }), false)
+  assert.equal(isDecryptFailure({ key: {}, messageStubType: CIPHERTEXT_STUB }), false)
+  assert.equal(isDecryptFailure(null), false)
+})
+
+// ─── The answer gate ─────────────────────────────────────────────────
+
+const NOW_S = NOON_SGT / 1000
+const gate = (overrides = {}) => answerRefusal({
+  message: { id: 'm1', jid: PN, type: 'text', body: 'hello', is_from_me: 0 },
+  content: { conversation: 'hello' },
+  redelivered: false,
+  sentAtSeconds: NOW_S - 2,
+  receivedAtMs: NOON_SGT - 1000,
   nowMs: NOON_SGT,
   maxAgeSeconds: 180,
   ...overrides,
 })
 
-test('a fresh notify message qualifies', () => {
-  assert.equal(live(), null)
+test('a clear, live, first-delivery message passes the gate', () => {
+  assert.equal(gate(), null)
+  const photo = { id: 'm2', jid: PN, type: 'image', body: null, media_key: 'a2V5', media_url: 'https://mmg.whatsapp.net/x', is_from_me: 0 }
+  assert.equal(gate({ message: photo, content: { imageMessage: {} } }), null, 'media without a caption is content')
 })
 
-test('history, catch-up and old messages never qualify', () => {
-  assert.equal(live({ upsertType: 'append' }), 'not_live')
-  assert.equal(live({ upsertType: undefined }), 'not_live')
-  assert.equal(live({ sentAtSeconds: NOON_SGT / 1000 - 181 }), 'too_old')
-  assert.equal(live({ sentAtSeconds: null }), 'no_timestamp')
-  assert.equal(live({ sentAtSeconds: NOON_SGT / 1000 + 3600 }), 'bad_timestamp')
+test('a message whose id failed to decrypt earlier is never answered, however fresh', () => {
+  // The resend carries the resend time, so every timestamp check passes.
+  assert.equal(gate({ redelivered: true }), 'redelivered')
 })
 
-test('own messages, reactions, broadcasts and unknown payloads never qualify', () => {
-  assert.equal(live({ message: { jid: PN, type: 'text', is_from_me: 1 } }), 'from_me')
-  assert.equal(live({ message: { jid: PN, type: 'reaction', is_from_me: 0 } }), 'unsupported_type')
-  assert.equal(live({ message: { jid: PN, type: 'unknown', is_from_me: 0 } }), 'unsupported_type')
-  assert.equal(live({ message: { jid: 'status@broadcast', type: 'text', is_from_me: 0 } }), 'broadcast')
-  assert.equal(live({ message: { jid: '1203630001@newsletter', type: 'text', is_from_me: 0 } }), 'newsletter')
-  assert.equal(live({ message: null }), 'unparsed')
+test('edits, deletes, reactions and poll votes are not messages', () => {
+  for (const key of ['protocolMessage', 'editedMessage', 'pollUpdateMessage', 'reactionMessage', 'keepInChatMessage', 'pinInChatMessage']) {
+    assert.equal(gate({ content: { conversation: 'hello', [key]: {} } }), 'protocol', key)
+  }
+})
+
+test('unsupported types and empty bodies are skipped', () => {
+  assert.equal(gate({ message: { jid: PN, type: 'reaction', body: '👍' }, content: null }), 'unsupported_type')
+  assert.equal(gate({ message: { jid: PN, type: 'unknown' }, content: null }), 'unsupported_type')
+  assert.equal(gate({ message: { jid: PN, type: 'text', body: '' } }), 'no_content')
+  assert.equal(gate({ message: { jid: PN, type: 'text', body: '  \n ' } }), 'no_content')
+  assert.equal(gate({ message: { jid: PN, type: 'text', body: null } }), 'no_content')
+  assert.equal(gate({ message: { jid: PN, type: 'image', body: 'caption' } }), 'no_content', 'media with nothing to fetch')
+  assert.equal(gate({ message: { jid: PN, type: 'location', body: null } }), 'no_content')
+})
+
+test('a message sent too long before now is too old', () => {
+  assert.equal(gate({ sentAtSeconds: null }), 'no_timestamp')
+  assert.equal(gate({ sentAtSeconds: 0 }), 'no_timestamp')
+  assert.equal(gate({ sentAtSeconds: NOW_S - 181 }), 'too_old')
+})
+
+test('a message sent long before this server received it is stale', () => {
+  assert.equal(gate({ sentAtSeconds: NOW_S - 70, receivedAtMs: NOON_SGT - 5000 }), 'stale')
+  assert.equal(gate({ sentAtSeconds: NOW_S - 50, receivedAtMs: NOON_SGT }), null, 'a slow but plausible delivery')
+  assert.equal(gate({ receivedAtMs: undefined }), 'no_timestamp')
+})
+
+test('a message stamped in the future is clock skew', () => {
+  assert.equal(gate({ sentAtSeconds: NOW_S + 30, receivedAtMs: NOON_SGT }), 'clock_skew')
+  assert.equal(gate({ sentAtSeconds: NOW_S + 5, receivedAtMs: NOON_SGT }), null, 'a few seconds of drift is tolerated')
+})
+
+test('the stub-then-resend sequence: stub is filtered, resend is skipped, a normal message is answered', () => {
+  const id = '3EB0000000000000000001'
+  const stub = { key: { id, remoteJid: PN }, messageStubType: CIPHERTEXT_STUB }
+  const failed = new Set()
+  if (isDecryptFailure(stub)) failed.add(stub.key.id)
+  assert.equal(live({ raw: stub, message: null }), 'decrypt_failed')
+
+  const resend = { id, jid: PN, type: 'text', body: 'old message', is_from_me: 0 }
+  assert.equal(live({ raw: { key: { id, remoteJid: PN }, message: { conversation: 'old message' } }, message: resend }), null)
+  assert.equal(gate({ message: resend, redelivered: failed.has(id) }), 'redelivered')
+
+  const fresh = { id: '3EB0000000000000000002', jid: PN, type: 'text', body: 'new', is_from_me: 0 }
+  assert.equal(gate({ message: fresh, redelivered: failed.has(fresh.id) }), null)
 })
 
 test('a manual reply is a recent own message the bot did not send', () => {

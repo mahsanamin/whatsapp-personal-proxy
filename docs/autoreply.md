@@ -189,12 +189,25 @@ a single rule, which then overrides the set value.
 
 ## Safety rules that always apply
 
-- **Live messages only.** Only messages WhatsApp delivers as new (`notify`) and sent
-  within the last few minutes (180 seconds by default, see "Server limits") are
-  considered. History sync, catch-up after a reconnect and offline delivery are
-  ignored, so a reconnect cannot trigger hundreds of replies.
-- **Never answered:** your own messages, status broadcasts, newsletters, reactions,
-  protocol messages and unknown message types.
+- **Live messages only.** Only messages WhatsApp delivers as new (`notify`) are
+  candidates. History sync, catch-up after a reconnect and offline delivery are ignored
+  without a log entry, so a reconnect cannot trigger hundreds of replies. Your own
+  messages, status broadcasts and newsletters are ignored the same way.
+- **A strict gate before any rule.** An in-scope message is answered only if every one
+  of these holds. Otherwise it is logged as `skipped` with the reason shown:
+
+  | Condition | Skip reason |
+  |---|---|
+  | It decrypted on first delivery. A message that failed to decrypt is resent later by the sender's device with a fresh timestamp, so it can look live while being days old. Its id is remembered for 30 days, across restarts. | `redelivered` |
+  | It is a real message, not an edit, delete, reaction, poll vote, pin or disappearing-message setting. | `protocol` |
+  | It is a supported type (text, image, video, document, audio, voice note, sticker, location, contact, album). | `unsupported_type` |
+  | It has content: non-empty text, or media there is something to fetch for. | `no_content` |
+  | It was sent within the last few minutes (180 seconds by default, see "Server limits"). | `too_old`, `no_timestamp` |
+  | It was sent at most 60 seconds before this server received it. | `stale` |
+  | It is not stamped more than 10 seconds in the future. | `clock_skew` |
+
+  The stub WhatsApp hands over when decryption fails is never answered and not logged;
+  the resend that follows is logged once as `redelivered`.
 - **One answer per message.** The message id is recorded before sending, so a message
   WhatsApp delivers twice is answered at most once.
 - **Server caps** that a template can only tighten: a minimum delay between any two

@@ -693,25 +693,83 @@ export function scopeRefusal(scope, { chatJid, aliases = [chatJid], allowlisted 
 
 // ─── Live messages only ──────────────────────────────────────────────
 
+// proto.WebMessageInfo.StubType.CIPHERTEXT: what Baileys upserts in place of
+// a message it could not decrypt. It asks the sender's device to resend, and
+// the resend arrives later under the same id with a fresh timestamp.
+export const CIPHERTEXT_STUB = 2
+
+// How far the sender's timestamp may sit from the moment this server received
+// the message. A live message arrives within seconds. One that was sent long
+// before it reached us was held somewhere, so it is not a live conversation.
+export const MAX_DELIVERY_DELAY_SECONDS = 60
+// WhatsApp stamps the time, so a timestamp ahead of our clock means one of
+// the two clocks is wrong. Allow a little drift and no more.
+export const MAX_FUTURE_SECONDS = 10
+
+// Message content that is never a new thing someone said: edits, deletes,
+// disappearing-message settings, pins, poll votes, reactions.
+const NON_CONTENT_KEYS = [
+  'protocolMessage', 'editedMessage', 'pollUpdateMessage', 'reactionMessage', 'encReactionMessage',
+  'keepInChatMessage', 'pinInChatMessage', 'senderKeyDistributionMessage',
+]
+const MEDIA_TYPES = ['image', 'video', 'doc', 'audio', 'voice', 'sticker']
+
+/** Is this raw Baileys message the stub left by a failed decryption? */
+export function isDecryptFailure(raw) {
+  return raw?.messageStubType === CIPHERTEXT_STUB && typeof raw?.key?.id === 'string' && raw.key.id !== ''
+}
+
 /**
- * Whether an incoming message is a fresh, live one worth answering. History
- * sync, reconnect catch-up and offline delivery replay old messages; answering
- * those would send hundreds of replies after one reconnect.
- * Returns null when it qualifies, or a reason.
+ * The cheap first filter, run on every stored message. Whatever it refuses is
+ * not a candidate at all and is never logged: history sync and reconnect
+ * catch-up (Baileys delivers offline messages as 'append', not 'notify') pass
+ * through here by the thousand.
+ * Returns null when the message goes on to the gate, or a reason.
  */
-export function liveMessageRefusal({ upsertType, message, sentAtSeconds, nowMs, maxAgeSeconds }) {
+export function liveMessageRefusal({ upsertType, message, raw }) {
   if (upsertType !== 'notify') return 'not_live'
+  if (isDecryptFailure(raw)) return 'decrypt_failed'
   if (!message) return 'unparsed'
   if (message.is_from_me) return 'from_me'
   if (typeof message.jid !== 'string') return 'no_chat'
   if (message.jid.endsWith('@broadcast')) return 'broadcast'
   if (message.jid.endsWith('@newsletter')) return 'newsletter'
-  if (!MESSAGE_TYPES.includes(message.type)) return 'unsupported_type'
-  if (!Number.isFinite(sentAtSeconds) || sentAtSeconds <= 0) return 'no_timestamp'
-  const ageSeconds = nowMs / 1000 - sentAtSeconds
-  if (ageSeconds > maxAgeSeconds) return 'too_old'
-  if (ageSeconds < -maxAgeSeconds) return 'bad_timestamp'
   return null
+}
+
+/**
+ * The gate an in-scope live message must pass before any rule is looked at.
+ * A message is answered only when every condition holds, so anything doubtful
+ * is skipped. Each refusal is logged with its reason.
+ *
+ *   redelivered    the id failed to decrypt earlier and was resent: its
+ *                  timestamp is the resend time, so it may be days old
+ *   protocol       an edit, delete, reaction, poll vote or other non-message
+ *   unsupported_type, no_content
+ *   no_timestamp, too_old (sent too long before now)
+ *   stale          sent long before this server received it
+ *   clock_skew     stamped in the future
+ *
+ * `content` is the unwrapped raw message content, `receivedAtMs` the moment
+ * ingestion saw it.
+ */
+export function answerRefusal({ message, content, redelivered, sentAtSeconds, receivedAtMs, nowMs, maxAgeSeconds }) {
+  if (redelivered) return 'redelivered'
+  if (content && NON_CONTENT_KEYS.some(key => content[key])) return 'protocol'
+  if (!MESSAGE_TYPES.includes(message.type)) return 'unsupported_type'
+  if (!hasContent(message)) return 'no_content'
+  if (!Number.isFinite(sentAtSeconds) || sentAtSeconds <= 0) return 'no_timestamp'
+  if (nowMs / 1000 - sentAtSeconds > maxAgeSeconds) return 'too_old'
+  if (!Number.isFinite(receivedAtMs)) return 'no_timestamp'
+  const delaySeconds = receivedAtMs / 1000 - sentAtSeconds
+  if (delaySeconds > MAX_DELIVERY_DELAY_SECONDS) return 'stale'
+  if (delaySeconds < -MAX_FUTURE_SECONDS) return 'clock_skew'
+  return null
+}
+
+function hasContent(message) {
+  if (MEDIA_TYPES.includes(message.type)) return Boolean(message.media_key || message.media_url)
+  return typeof message.body === 'string' && message.body.trim() !== ''
 }
 
 /**

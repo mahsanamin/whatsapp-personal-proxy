@@ -12,6 +12,7 @@ import { LIMIT_FIELDS, mergeLimits } from '../util/autoreplyLimits.js'
 const HOUR_MS = 60 * 60 * 1000
 const KEEP_DECISIONS_MS = 30 * 24 * HOUR_MS
 const KEEP_PROCESSED_MS = 2 * 24 * HOUR_MS
+const KEEP_DECRYPT_FAILURES_MS = 30 * 24 * HOUR_MS
 
 const placeholders = (list) => list.map(() => '?').join(',')
 
@@ -405,6 +406,27 @@ export function contactSnapshot({ ruleSet, rulesetId, chatJid, senderJid, text, 
   }
 }
 
+// ─── Decrypt failures ────────────────────────────────────────────────
+
+/**
+ * Remember that this id failed to decrypt. Called from ingestion for the
+ * stub Baileys upserts, before the resend can arrive.
+ */
+export function recordDecryptFailure(messageId, chatJid, nowMs) {
+  db.prepare('INSERT OR IGNORE INTO decrypt_failures (message_id, chat_jid, failed_at) VALUES (?, ?, ?)')
+    .run(messageId, chatJid ?? null, nowMs)
+}
+
+/** Did this id fail to decrypt before, so this copy is a resend? */
+export function wasDecryptFailure(messageId) {
+  return Boolean(db.prepare('SELECT 1 FROM decrypt_failures WHERE message_id = ?').get(messageId))
+}
+
+/** Forget failures older than any resend could be. Run at start and from prune(). */
+export function pruneDecryptFailures(nowMs) {
+  db.prepare('DELETE FROM decrypt_failures WHERE failed_at < ?').run(nowMs - KEEP_DECRYPT_FAILURES_MS)
+}
+
 let lastPruneAt = 0
 
 /** Keep the bookkeeping tables bounded. Cheap enough to call on every message. */
@@ -414,4 +436,5 @@ export function prune(nowMs) {
   db.prepare('DELETE FROM autoreply_processed WHERE at < ?').run(nowMs - KEEP_PROCESSED_MS)
   db.prepare('DELETE FROM autoreply_decisions WHERE at < ?').run(nowMs - KEEP_DECISIONS_MS)
   db.prepare('DELETE FROM autoreply_contacts WHERE updated_at < ? AND (muted_until IS NULL OR muted_until < ?)').run(nowMs - KEEP_DECISIONS_MS, nowMs)
+  pruneDecryptFailures(nowMs)
 }

@@ -200,3 +200,42 @@ test('the kill switch is off until turned on', () => {
   assert.equal(store.isEnabled(), true)
   store.setEnabled(false)
 })
+
+// ─── Decrypt failures ────────────────────────────────────────────────
+
+test('a failed decryption is remembered for its resend, a normal id is not', () => {
+  store.recordDecryptFailure('3EB0DECRYPT0001', LID, NOW)
+  store.recordDecryptFailure('3EB0DECRYPT0001', LID, NOW + 1000) // the second failure of the same id
+  assert.equal(store.wasDecryptFailure('3EB0DECRYPT0001'), true)
+  assert.equal(store.wasDecryptFailure('3EB0NORMAL00001'), false)
+  const row = db.prepare('SELECT * FROM decrypt_failures WHERE message_id = ?').get('3EB0DECRYPT0001')
+  assert.equal(row.failed_at, NOW, 'the first failure is kept')
+})
+
+test('decrypt failures are forgotten after 30 days', () => {
+  store.recordDecryptFailure('3EB0OLDFAILURE1', LID, NOW - 31 * 24 * 3600_000)
+  store.recordDecryptFailure('3EB0NEWFAILURE1', LID, NOW - 29 * 24 * 3600_000)
+  store.pruneDecryptFailures(NOW)
+  assert.equal(store.wasDecryptFailure('3EB0OLDFAILURE1'), false)
+  assert.equal(store.wasDecryptFailure('3EB0NEWFAILURE1'), true)
+})
+
+test('a decrypt failure survives a restart', async () => {
+  const { execFileSync } = await import('node:child_process')
+  const { mkdtempSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = mkdtempSync(join(tmpdir(), 'wpp-decrypt-'))
+  const storeUrl = new URL('../src/db/autoreply.js', import.meta.url).href
+  const run = (code) => execFileSync(process.execPath, ['--input-type=module', '-e', `
+    const store = await import(${JSON.stringify(storeUrl)})
+    ${code}
+  `], { env: { ...process.env, DB_PATH: join(dir, 'wpp.db') }, encoding: 'utf8' }).trim()
+  try {
+    run(`store.recordDecryptFailure('3EB0RESTART0001', '15555550201@lid', Date.now())`)
+    assert.equal(run(`console.log(store.wasDecryptFailure('3EB0RESTART0001'))`), 'true')
+    assert.equal(run(`console.log(store.wasDecryptFailure('3EB0RESTART0002'))`), 'false')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
