@@ -16,10 +16,19 @@ import { saveContactName, repairContactNames } from '../db/contactNames.js'
 import { applyUnreadUpdate, unreadState, recordUnreadMessage, applyUnreadReceipt } from '../db/unread.js'
 import { incomingContact } from '../util/contactIdentity.js'
 import { jidUser } from '../util/jid.js'
+import { createConnectionGate } from '../util/connectionGate.js'
+import { describeContacts } from '../util/vcard.js'
+import { forgetProfilePicture } from './pictures.js'
+import { onMessageIngested, noteDecryptFailure } from './autoreply.js'
 
 const MAX_RETRIES = 10
+// A linked account that has not reached 'open' by now is stuck, not slow.
+const CONNECT_WATCHDOG_MS = 90_000
 let retries = 0
+let waVersion = null
+let connectWatchdog = null
 let currentSock = null
+const connectionGate = createConnectionGate()
 let sessionDir = config.waSessionPath
 let linkedCache = null
 let linkedPhoneNumber = null
@@ -78,6 +87,10 @@ function mentionsMe(message) {
 const logger = pino({ level: config.waLogLevel })
 
 export async function createWAClient(sessionPath, eventBus) {
+  // Supersede any earlier attempt and its pending retry, so the socket ended
+  // below cannot schedule a reconnect that replaces the one created here.
+  const attempt = connectionGate.begin()
+
   // Close existing socket to prevent duplicate listeners
   if (currentSock) {
     try { currentSock.end() } catch (_) {}
@@ -89,7 +102,19 @@ export async function createWAClient(sessionPath, eventBus) {
   refreshLinked()
   rememberMyJids(state.creds)
 
-  const { version } = await fetchLatestBaileysVersion()
+  // Fetched from GitHub, which has no timeout by default. One request that
+  // never answered left a reconnect waiting forever: no socket, no error, no
+  // retry, and three weeks of messages never arrived. Fetch once, with a
+  // timeout; Baileys falls back to its bundled version on failure.
+  let version = waVersion
+  if (!version) {
+    const latest = await fetchLatestBaileysVersion({ timeout: 10_000 })
+    version = latest.version
+    if (latest.isLatest) waVersion = version
+  }
+
+  // Another attempt started while this one was awaiting; let that one win.
+  if (!connectionGate.isCurrent(attempt)) return
 
   const sock = makeWASocket({
     version,
@@ -122,6 +147,7 @@ export async function createWAClient(sessionPath, eventBus) {
   })
 
   currentSock = sock
+
   sock.ev.on('creds.update', async () => {
     await saveCreds()
     refreshLinked()
@@ -129,6 +155,10 @@ export async function createWAClient(sessionPath, eventBus) {
   })
 
   sock.ev.on('connection.update', async (update) => {
+    // Events from a socket that has been replaced describe a connection nobody
+    // uses any more: its QR is unscannable and its close was intentional.
+    if (!connectionGate.isCurrent(attempt)) return
+
     const { connection, lastDisconnect, qr } = update
 
     if (qr) {
@@ -195,6 +225,7 @@ export async function createWAClient(sessionPath, eventBus) {
     }
 
     if (connection === 'close') {
+      clearTimeout(connectWatchdog)
       eventBus.waStatus = 'close'
       eventBus.emit('wa.status', { status: 'close' })
 
@@ -218,16 +249,21 @@ export async function createWAClient(sessionPath, eventBus) {
         return
       }
 
-      // Retry with exponential backoff
-      if (retries < MAX_RETRIES) {
-        const delay = Math.min(1000 * Math.pow(2, retries), 60_000)
-        retries++
-        setTimeout(() => createWAClient(sessionPath, eventBus), delay)
-      } else {
-        eventBus.emit('wa.failed', { message: 'Max reconnect attempts reached' })
-      }
+      scheduleReconnect(sessionPath, eventBus, attempt)
     }
   })
+
+  // An unlinked account legitimately sits in 'connecting' while it shows QR
+  // codes, so only a linked one is held to the deadline.
+  clearTimeout(connectWatchdog)
+  if (isLinked()) {
+    connectWatchdog = setTimeout(() => {
+      if (!connectionGate.isCurrent(attempt) || eventBus.waStatus === 'open') return
+      logger.warn('WhatsApp did not connect in time, restarting the connection')
+      // Ending the socket fires 'close', which schedules the retry.
+      try { sock.end(new Error('connect timeout')) } catch (_) { scheduleReconnect(sessionPath, eventBus, attempt) }
+    }, CONNECT_WATCHDOG_MS)
+  }
 
   // ─── Contact name resolution system ────────────────────────────────
   // WhatsApp uses @lid JIDs for chats but names come with @s.whatsapp.net JIDs.
@@ -261,6 +297,11 @@ export async function createWAClient(sessionPath, eventBus) {
 
   // Process a contact object from Baileys (contacts.upsert / messaging-history.set)
   function processContact(contact) {
+    // WhatsApp announces a new or removed picture as imgUrl 'changed' /
+    // 'removed'. Dropping the cache here is what lets the TTL be a full day.
+    if (contact.imgUrl !== undefined) {
+      for (const jid of [contact.id, contact.lid, contact.phoneNumber]) forgetProfilePicture(jid)
+    }
     // Address book name takes priority over pushName
     const name = contact.name || contact.notify || contact.verifiedName
     if (name && contact.id) upsertContact(contact.id, name, contact.name ? 3 : 1)
@@ -394,6 +435,10 @@ export async function createWAClient(sessionPath, eventBus) {
         const contact = incomingContact(msg)
         if (contact) upsertContact(contact.jid, contact.name)
 
+        // Before normalization, which drops the stub: auto-reply must know
+        // this id failed, so the resend that follows is never answered.
+        noteDecryptFailure(msg)
+
         const normalized = normalizeMessage(msg)
         if (!normalized) continue
         saveMessage(normalized)
@@ -407,6 +452,10 @@ export async function createWAClient(sessionPath, eventBus) {
           canonical_jid: canonicalJid(normalized.jid),
           from_name: resolveNames([normalized.from_jid]).get(normalized.from_jid) || null,
         })
+        // Runs later on its own queue; it decides for itself whether this is a
+        // live message it may answer, so history and catch-up pass through
+        // here harmlessly.
+        onMessageIngested(msg, normalized, type)
       } catch (err) {
         // Never crash on a bad message
       }
@@ -440,7 +489,7 @@ export async function createWAClient(sessionPath, eventBus) {
  * the catch around ingestion — which is why the mirror held text and stickers
  * (the one media branch that never sets a size) and nothing else.
  */
-function toNumber(value) {
+export function toNumber(value) {
   if (value === null || value === undefined) return null
   if (typeof value === 'number') return Number.isFinite(value) ? value : null
   if (typeof value === 'bigint') return Number(value)
@@ -579,8 +628,7 @@ export function normalizeMessage(raw) {
       (loc.degreesLatitude != null ? `${loc.degreesLatitude}, ${loc.degreesLongitude}` : null)
   } else if (msg.contactMessage || msg.contactsArrayMessage) {
     type = 'contact'
-    body = msg.contactMessage?.displayName ||
-      (msg.contactsArrayMessage?.contacts || []).map(c => c.displayName).filter(Boolean).join(', ') || null
+    body = describeContacts(msg.contactMessage ? [msg.contactMessage] : msg.contactsArrayMessage?.contacts)
   } else if (msg.reactionMessage) {
     type = 'reaction'
     body = msg.reactionMessage.text
@@ -751,6 +799,29 @@ export function isLinked() {
 export function ensureConnected() {
   if (!currentSock?.user) return null
   return currentSock
+}
+
+/**
+ * Retry with exponential backoff, and never stop. Giving up after a fixed
+ * count left the proxy disconnected until someone restarted it, and a
+ * reconnect that threw was never retried at all.
+ */
+function scheduleReconnect(sessionPath, eventBus, attempt) {
+  const delay = Math.min(1000 * Math.pow(2, retries), 60_000)
+  retries++
+  if (retries === MAX_RETRIES) {
+    logger.warn({ retries }, 'WhatsApp still not reconnected, retrying every minute')
+    eventBus.emit('wa.failed', { message: 'Max reconnect attempts reached' })
+  }
+  // Through the gate, so a superseded attempt can never schedule a retry.
+  connectionGate.retryLater(attempt, delay, () => {
+    createWAClient(sessionPath, eventBus).catch(err => {
+      logger.warn({ err: err.message }, 'reconnect failed')
+      // The failed call already took the newest token; claim a fresh one so
+      // the retry is not discarded as stale.
+      scheduleReconnect(sessionPath, eventBus, connectionGate.begin())
+    })
+  })
 }
 
 export function resetRetries() {

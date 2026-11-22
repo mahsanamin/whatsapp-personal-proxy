@@ -1,11 +1,11 @@
-FROM node:20-alpine AS dev
+FROM node:24-alpine AS dev
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci
 COPY . .
 CMD ["npm", "run", "dev", "--", "--host"]
 
-FROM node:20-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci

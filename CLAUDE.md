@@ -1,5 +1,8 @@
 # WPP — WhatsApp Personal Proxy
 
+`AGENTS.md` holds the working rules, including the Baileys version check to run at the
+start of every coding session. Read it first.
+
 Self-hosted WhatsApp gateway. The server runs on **one** machine (the one your phone is
 linked to); every other machine drives it through the `wpp` CLI over REST.
 
@@ -13,7 +16,7 @@ linked to); every other machine drives it through the `wpp` CLI over REST.
 
 ## Architecture
 
-- **server/** — Node 20 + Fastify + Baileys + SQLite (better-sqlite3)
+- **server/** — Node 24 + Fastify + Baileys + SQLite (better-sqlite3)
 - **ui/** — React 18 + Vite + Tailwind (dark terminal-inspired theme)
 - **wpp** — the CLI: one Python file, standard library only, bundled into the server
   image and served at `/api/cli/wpp` so a new machine bootstraps with one `curl`
@@ -32,7 +35,7 @@ is right in development and production.
 
 Valid scopes: `personal:send`, `others:send`, `others:whitelist:read`,
 `others:whitelist:manage`, `groups:send`, `channels:read`, `channels:summarize`,
-`tabs:manage`, `wa:admin`.
+`tabs:manage`, `wa:admin`, `autoreply:manage`.
 
 Tokens are SHA-256 hashed at rest, `sk_` prefix, shown once at creation. Admin password
 comparison is constant-time via `crypto.timingSafeEqual`.

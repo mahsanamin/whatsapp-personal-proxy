@@ -5,7 +5,8 @@ import Connect from './pages/Connect'
 import Workspace from './pages/Workspace'
 import Tokens from './pages/Tokens'
 import Whitelist from './pages/Whitelist'
-import { api } from './api/client'
+import AutoReply from './pages/AutoReply'
+import { api, UNAUTHORIZED_EVENT } from './api/client'
 
 export default function App() {
   const [authed, setAuthed] = useState(null) // null = loading
@@ -20,6 +21,12 @@ export default function App() {
     api('/tokens')
       .then(() => { setAuthed(true); return checkLink() })
       .catch(() => setAuthed(false))
+  }, [])
+
+  useEffect(() => {
+    const onUnauthorized = () => setAuthed(false)
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
   }, [])
 
   const handleLogin = () => { setAuthed(true); checkLink() }
@@ -44,6 +51,7 @@ export default function App() {
         <Route path="/connect" element={!authed ? <Navigate to="/login" /> : <Connect />} />
         <Route path="/tokens" element={!authed ? <Navigate to="/login" /> : <Tokens onLogout={handleLogout} />} />
         <Route path="/whitelist" element={!authed ? <Navigate to="/login" /> : <Whitelist />} />
+        <Route path="/autoreply" element={!authed ? <Navigate to="/login" /> : <AutoReply />} />
         {/* Nothing to show in the workspace until a phone is paired, so send a
             fresh install straight to the QR page instead of an endless sync. */}
         <Route

@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { useConversationRead } from '../hooks/useConversationRead'
 import { useWebSocket } from '../ws/useWebSocket'
+import { useVoiceRecorder, voiceRecordingSupported, formatElapsed } from '../hooks/useVoiceRecorder'
 
 function formatJid(jid) {
   if (jid.endsWith('@s.whatsapp.net')) return '+' + jid.replace('@s.whatsapp.net', '')
@@ -24,6 +25,18 @@ function timeAgo(ts) {
   return new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
+// Chats whose picture failed recently, so scrolling a row back into view or
+// re-rendering the list does not ask again. Expires so a picture that was
+// missing only because WhatsApp was reconnecting turns up later.
+const PICTURE_RETRY_MS = 10 * 60 * 1000
+const pictureMisses = new Map()
+
+function hasPicture(jid) {
+  if (!jid || !/@(s\.whatsapp\.net|lid|g\.us)$/.test(jid)) return false
+  const missedAt = pictureMisses.get(jid)
+  return !missedAt || Date.now() - missedAt > PICTURE_RETRY_MS
+}
+
 function Avatar({ name, jid, size = 'md' }) {
   const label = name || formatJid(jid)
   const initial = label.replace(/^\+/, '').charAt(0).toUpperCase()
@@ -31,12 +44,37 @@ function Avatar({ name, jid, size = 'md' }) {
   const idx = (jid || '').split('').reduce((a, c) => a + c.charCodeAt(0), 0) % colors.length
   const sizeClass = size === 'sm' ? 'w-8 h-8 text-xs' : 'w-10 h-10 text-sm'
   const isGroup = jid?.endsWith('@g.us')
+  const [loaded, setLoaded] = useState(false)
+  const [failed, setFailed] = useState(() => !hasPicture(jid))
+
+  useEffect(() => {
+    setLoaded(false)
+    setFailed(!hasPicture(jid))
+  }, [jid])
 
   return (
-    <div className={`${sizeClass} ${colors[idx]} rounded-full flex items-center justify-center font-semibold text-white flex-shrink-0`}>
+    <div className={`${sizeClass} ${colors[idx]} relative overflow-hidden rounded-full flex items-center justify-center font-semibold text-white flex-shrink-0`}>
       {isGroup ? (
         <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v1h8v-1zM6 8a2 2 0 11-4 0 2 2 0 014 0zM16 18v-1a5.97 5.97 0 00-.75-2.906A3.005 3.005 0 0119 17v1h-3zM4.75 14.094A5.97 5.97 0 004 17v1H1v-1a3 3 0 013.75-2.906z" /></svg>
       ) : initial}
+      {!failed && (
+        // Lazy, so only rows on screen ask the server, which in turn is the
+        // only thing that asks WhatsApp. The initials stay underneath until
+        // the image has actually loaded.
+        <img
+          src={`/api/channels/${encodeURIComponent(jid)}/picture`}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          onLoad={() => setLoaded(true)}
+          onError={() => {
+            pictureMisses.set(jid, Date.now())
+            setFailed(true)
+          }}
+          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-150 ${loaded ? 'opacity-100' : 'opacity-0'}`}
+        />
+      )}
     </div>
   )
 }
@@ -101,8 +139,10 @@ function MediaBlock({ msg, label }) {
       setReason('could not reach the server')
     }
   }
-  const src = `/api/channels/${encodeURIComponent(msg.jid)}/messages/${msg.id}/media`
-  const srcWithRetry = retryKey > 0 ? `${src}?t=${retryKey}` : src
+  // A voice note we just recorded plays from the browser's copy: while it is
+  // sending there is nothing on the server to fetch yet.
+  const src = msg.localUrl || `/api/channels/${encodeURIComponent(msg.jid)}/messages/${msg.id}/media`
+  const srcWithRetry = retryKey > 0 && !msg.localUrl ? `${src}?t=${retryKey}` : src
   const size = msg.media_size > 0 ? `${(msg.media_size / 1024).toFixed(0)} KB` : null
 
   if (hasError) {
@@ -167,7 +207,7 @@ function MediaBlock({ msg, label }) {
           className="w-full h-9"
         />
         <span className="text-[10px] text-neutral-500">
-          {msg.type === 'voice' ? 'Voice note' : 'Audio'}{size ? ` · ${size}` : ''}
+          {msg.pending ? 'Sending voice note…' : msg.type === 'voice' ? 'Voice note' : 'Audio'}{size ? ` · ${size}` : ''}
         </span>
       </div>
     )
@@ -462,6 +502,7 @@ export default function Workspace({ onLogout }) {
   const [syncNote, setSyncNote] = useState(null)
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef(null)
+  const voice = useVoiceRecorder()
   const [search, setSearch] = useState('')
   const [sendError, setSendError] = useState(null)
   const [syncStats, setSyncStats] = useState({ channels: 0, messages: 0 })
@@ -472,6 +513,10 @@ export default function Workspace({ onLogout }) {
   // Prepending older messages must not yank the view to the bottom, and must
   // keep the reader looking at the same message they were already reading.
   const pendingScrollRestore = useRef(null)
+  // Whether the reader is at the newest message. While true, anything that
+  // grows the pane (a new message, an image finishing loading) keeps them
+  // there; once they scroll up to read, nothing yanks them back down.
+  const pinnedToBottom = useRef(true)
   const inputRef = useRef(null)
 
   // One conversation can be addressed two ways, so an arriving message may
@@ -492,6 +537,24 @@ export default function Workspace({ onLogout }) {
     },
     onStatus: (data) => setWaStatus(data.status),
     onChannelUpdate: () => loadChannels(),
+    onReconnect: () => {
+      loadChannels()
+      api('/auth/wa/status').then(data => setWaStatus(data.status)).catch(() => {})
+      const jid = activeJidRef.current
+      if (!jid) return
+      // Merge rather than replace, so older pages the reader scrolled back to
+      // stay where they are.
+      api(`/channels/${encodeURIComponent(jid)}/messages?limit=${PAGE_SIZE}`)
+        .then(msgs => {
+          if (activeJidRef.current !== jid) return
+          setMessages(previous => {
+            const merged = new Map(previous.map(message => [message.id, message]))
+            for (const message of msgs) merged.set(message.id, message)
+            return [...merged.values()].sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+          })
+        })
+        .catch(() => {})
+    },
   })
 
   const loadChannels = useCallback(() => {
@@ -545,6 +608,7 @@ export default function Workspace({ onLogout }) {
     const controller = new AbortController()
     setOlderState({ loading: false, exhausted: false })
     pendingScrollRestore.current = null
+    pinnedToBottom.current = true
     api(`/channels/${encodeURIComponent(activeJid)}/messages?limit=${PAGE_SIZE}`, { signal: controller.signal })
       .then(msgs => {
         if (!active) return
@@ -645,8 +709,18 @@ export default function Workspace({ onLogout }) {
       pendingScrollRestore.current = null
       return
     }
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    // Your own message always brings you down to it, as WhatsApp does.
+    if (messages[messages.length - 1]?.is_from_me) pinnedToBottom.current = true
+    // Jump, do not animate: a smooth scroll starts from the top of a freshly
+    // opened chat, passes the "near the top" trigger on its way down, and loads
+    // an older page that then holds the view halfway up the conversation.
+    if (pinnedToBottom.current && pane) pane.scrollTop = pane.scrollHeight
   }, [messages])
+
+  const keepPinned = () => {
+    const pane = messagePaneRef.current
+    if (pinnedToBottom.current && pane) pane.scrollTop = pane.scrollHeight
+  }
 
   useEffect(() => {
     if (activeJid && inputRef.current) inputRef.current.focus()
@@ -678,23 +752,89 @@ export default function Workspace({ onLogout }) {
 
     try {
       const res = await api('/send', { method: 'POST', body: { jid: activeJid, message: text } })
-      setMessages(prev => {
-        // The echo can beat the HTTP response; if it already arrived, the
-        // placeholder is simply redundant.
-        if (res.messageId && prev.some(m => m.id === res.messageId)) {
-          return prev.filter(m => m.id !== tempId)
-        }
-        return prev.map(m => (
-          m.id === tempId ? { ...m, id: res.messageId || m.id, pending: false } : m
-        ))
-      })
+      adoptSentId(tempId, res.messageId)
     } catch (err) {
-      // Nothing was sent, so stop showing it as though it had been.
-      setMessages(prev => prev.filter(m => m.id !== tempId))
-      setSendError(err.message)
+      dropPending(tempId, err)
+    }
+  }
+
+  const adoptSentId = (tempId, messageId) => {
+    setMessages(prev => {
+      // The echo can beat the HTTP response; if it already arrived, the
+      // placeholder is simply redundant.
+      if (messageId && prev.some(m => m.id === messageId)) {
+        return prev.filter(m => m.id !== tempId)
+      }
+      return prev.map(m => (
+        m.id === tempId ? { ...m, id: messageId || m.id, pending: false } : m
+      ))
+    })
+  }
+
+  // Nothing was sent, so stop showing it as though it had been.
+  const dropPending = (tempId, err) => {
+    setMessages(prev => {
+      const dropped = prev.find(m => m.id === tempId)
+      if (dropped?.localUrl) URL.revokeObjectURL(dropped.localUrl)
+      return prev.filter(m => m.id !== tempId)
+    })
+    setSendError(err.message)
+    setTimeout(() => setSendError(null), 5000)
+  }
+
+  const handleVoiceStart = async () => {
+    setSendError(null)
+    try {
+      await voice.start()
+    } catch (err) {
+      setSendError(err.name === 'NotAllowedError'
+        ? 'Microphone access is blocked. Allow it in the browser\'s site settings.'
+        : `Could not start recording: ${err.message}`)
       setTimeout(() => setSendError(null), 5000)
     }
   }
+
+  // Same placeholder-then-adopt pattern as text. The server converts whatever
+  // the browser recorded (webm, ogg or mp4) into the Ogg/Opus voice note
+  // phones expect, so the recording is sent as it is.
+  const handleVoiceSend = async () => {
+    const jid = activeJid
+    const blob = await voice.stop()
+    if (!blob || !jid) return
+    setSendError(null)
+
+    const tempId = `pending-${Date.now()}`
+    setMessages(prev => [...prev, {
+      id: tempId,
+      jid,
+      from_jid: 'me',
+      body: null,
+      type: 'voice',
+      timestamp: new Date().toISOString(),
+      is_from_me: 1,
+      reactions: [],
+      pending: true,
+      localUrl: URL.createObjectURL(blob),
+    }])
+
+    try {
+      const params = new URLSearchParams({ to: jid, voice: 'true', mimetype: blob.type })
+      const res = await fetch(`/api/media/send?${params}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: blob,
+      })
+      const data = await res.json().catch(() => ({ error: res.statusText }))
+      if (!res.ok) throw new Error(data.error || 'Voice note failed to send')
+      adoptSentId(tempId, data.messageId)
+    } catch (err) {
+      dropPending(tempId, err)
+    }
+  }
+
+  // Switching chats mid-recording would send the note to the wrong person.
+  useEffect(() => { voice.cancel() }, [activeJid, voice.cancel])
 
   // Upload straight to /media/send as raw bytes; the server takes the metadata
   // from the query string, so there is no multipart handling on either side.
@@ -808,6 +948,7 @@ export default function Workspace({ onLogout }) {
             </Link>
           )}
           <Link to="/whitelist" className="text-xs text-neutral-500 hover:text-accent transition-colors px-2 py-1 rounded hover:bg-neutral-800" title="Who API keys may message">Allow list</Link>
+          <Link to="/autoreply" className="text-xs text-neutral-500 hover:text-accent transition-colors px-2 py-1 rounded hover:bg-neutral-800" title="Rule-based automatic replies">Auto-reply</Link>
           <Link to="/tokens" className="text-xs text-neutral-500 hover:text-accent transition-colors px-2 py-1 rounded hover:bg-neutral-800">
             API Keys
           </Link>
@@ -885,7 +1026,15 @@ export default function Workspace({ onLogout }) {
               {/* Messages */}
               <div
                 ref={messagePaneRef}
-                onScroll={(e) => { if (e.currentTarget.scrollTop < 120) loadOlder() }}
+                onScroll={(e) => {
+                  const pane = e.currentTarget
+                  pinnedToBottom.current = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 80
+                  if (pane.scrollTop < 120) loadOlder()
+                }}
+                // Images and videos arrive after the jump to the bottom and push
+                // the newest message out of view unless the pane follows them.
+                onLoadCapture={keepPinned}
+                onLoadedMetadataCapture={keepPinned}
                 className="flex-1 overflow-y-auto px-5 py-3"
               >
                 {!olderState.exhausted && (
@@ -945,46 +1094,90 @@ export default function Workspace({ onLogout }) {
                 {sendError && (
                   <div className="px-5 py-1.5 text-xs text-red-400 bg-red-950/30">{sendError}</div>
                 )}
-                <form onSubmit={handleSend} className="px-5 py-3 flex items-center gap-3">
-                  <input
-                    ref={fileRef}
-                    type="file"
-                    className="hidden"
-                    onChange={(e) => handleAttach(e.target.files?.[0])}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => fileRef.current?.click()}
-                    disabled={uploading}
-                    title="Attach a photo, video, audio file or document"
-                    className="text-neutral-500 hover:text-accent disabled:opacity-40 transition-colors flex-shrink-0"
-                  >
-                    {uploading ? (
-                      <span className="text-xs">Sending…</span>
-                    ) : (
+                {voice.recording ? (
+                  <div className="px-5 py-3 flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={voice.cancel}
+                      title="Discard the recording"
+                      aria-label="Discard the recording"
+                      className="text-neutral-500 hover:text-red-400 transition-colors flex-shrink-0"
+                    >
                       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8}
-                          d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3M4 7h16" />
                       </svg>
+                    </button>
+                    <div className="flex-1 flex items-center gap-2.5 bg-neutral-800/60 rounded-xl px-4 py-2.5">
+                      <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                      <span className="font-mono text-sm text-neutral-200 tabular-nums">{formatElapsed(voice.elapsed)}</span>
+                      <span className="text-xs text-neutral-500">Recording voice note…</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleVoiceSend}
+                      className="bg-accent hover:bg-emerald-400 text-black rounded-xl px-5 py-2.5 text-sm font-semibold transition-all"
+                    >
+                      Send
+                    </button>
+                  </div>
+                ) : (
+                  <form onSubmit={handleSend} className="px-5 py-3 flex items-center gap-3">
+                    <input
+                      ref={fileRef}
+                      type="file"
+                      className="hidden"
+                      onChange={(e) => handleAttach(e.target.files?.[0])}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fileRef.current?.click()}
+                      disabled={uploading}
+                      title="Attach a photo, video, audio file or document"
+                      className="text-neutral-500 hover:text-accent disabled:opacity-40 transition-colors flex-shrink-0"
+                    >
+                      {uploading ? (
+                        <span className="text-xs">Sending…</span>
+                      ) : (
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8}
+                            d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                        </svg>
+                      )}
+                    </button>
+                    {voiceRecordingSupported && (
+                      <button
+                        type="button"
+                        onClick={handleVoiceStart}
+                        disabled={uploading}
+                        title="Record a voice note"
+                        aria-label="Record a voice note"
+                        className="text-neutral-500 hover:text-accent disabled:opacity-40 transition-colors flex-shrink-0"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8}
+                            d="M12 15a3 3 0 003-3V6a3 3 0 10-6 0v6a3 3 0 003 3zm6-3a6 6 0 01-12 0m6 6v3m-3 0h6" />
+                        </svg>
+                      </button>
                     )}
-                  </button>
-                  <input
-                    ref={inputRef}
-                    type="text"
-                    value={msgInput}
-                    onChange={(e) => setMsgInput(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) handleSend(e) }}
-                    placeholder="Type a message..."
-                    className="flex-1 bg-neutral-800/60 rounded-xl px-4 py-2.5 text-sm text-white placeholder-neutral-500 outline-none focus:ring-1 focus:ring-accent/50 transition-all"
-                  />
-                  <button
-                    type="submit"
-                    disabled={!msgInput.trim()}
-                    className="bg-accent hover:bg-emerald-400 disabled:opacity-30 disabled:hover:bg-accent text-black rounded-xl px-5 py-2.5 text-sm font-semibold transition-all"
-                  >
-                    Send
-                  </button>
-                </form>
+                    <input
+                      ref={inputRef}
+                      type="text"
+                      value={msgInput}
+                      onChange={(e) => setMsgInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) handleSend(e) }}
+                      placeholder="Type a message..."
+                      className="flex-1 bg-neutral-800/60 rounded-xl px-4 py-2.5 text-sm text-white placeholder-neutral-500 outline-none focus:ring-1 focus:ring-accent/50 transition-all"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!msgInput.trim()}
+                      className="bg-accent hover:bg-emerald-400 disabled:opacity-30 disabled:hover:bg-accent text-black rounded-xl px-5 py-2.5 text-sm font-semibold transition-all"
+                    >
+                      Send
+                    </button>
+                  </form>
+                )}
               </div>
             </>
           ) : (

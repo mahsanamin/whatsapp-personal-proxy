@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: server/package-lock.json
       - run: cd server && npm ci
@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - run: cd ui && npm ci
@@ -40,12 +40,19 @@ jobs:
 
   tests:
     name: Tests (server + CLI)
-    runs-on: ubuntu-latest
+    # Pinned: the CLI promises Python 3.9, and setup-python has no 3.9 build for
+    # the Ubuntu 26.04 image that ubuntu-latest now points at.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      # Several suites import fastify and better-sqlite3, so the server's
+      # dependencies have to be installed before the tests can load.
+      - run: cd server && npm ci
       - name: Server unit tests
         run: cd server && npm test
       - uses: actions/setup-python@v5

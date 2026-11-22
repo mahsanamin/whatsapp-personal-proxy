@@ -1,18 +1,26 @@
 import { useState } from 'react'
 import { api } from '../api/client'
 
+const REMEMBER_OPTIONS = [
+  { value: '30d', label: '30 days' },
+  { value: '60d', label: '60 days' },
+  { value: 'forever', label: 'Forever' },
+]
+
 export default function Login({ onLogin }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [remember, setRemember] = useState(false)
+  const [rememberFor, setRememberFor] = useState('30d')
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     setError(null)
     setLoading(true)
     try {
-      await api('/auth/login', { method: 'POST', body: { username, password } })
+      await api('/auth/login', { method: 'POST', body: { username, password, ...(remember ? { remember: rememberFor } : {}) } })
       onLogin()
     } catch (err) {
       setError(err.message)
@@ -54,9 +62,32 @@ export default function Login({ onLogin }) {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full bg-neutral-800/60 rounded-xl px-4 py-2.5 text-sm text-white placeholder-neutral-600 outline-none focus:ring-1 focus:ring-accent/50 transition-all mb-6"
+            className="w-full bg-neutral-800/60 rounded-xl px-4 py-2.5 text-sm text-white placeholder-neutral-600 outline-none focus:ring-1 focus:ring-accent/50 transition-all mb-4"
             placeholder="Enter password"
           />
+
+          <div className="flex items-center justify-between gap-3 mb-6">
+            <label className="flex items-center gap-2 text-xs text-neutral-400 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={remember}
+                onChange={(e) => setRemember(e.target.checked)}
+                className="w-3.5 h-3.5 accent-emerald-500"
+              />
+              Remember me
+            </label>
+            <select
+              value={rememberFor}
+              onChange={(e) => setRememberFor(e.target.value)}
+              disabled={!remember}
+              aria-label="Remember me for"
+              className="bg-neutral-800/60 rounded-lg px-2 py-1 text-xs text-neutral-200 outline-none focus:ring-1 focus:ring-accent/50 disabled:opacity-40"
+            >
+              {REMEMBER_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
 
           <button
             type="submit"

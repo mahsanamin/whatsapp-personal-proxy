@@ -1,0 +1,51 @@
+{
+  "format": 1,
+  "name": "FAQ by keyword",
+  "version": "1.0.0",
+  "description": "Answer common questions by keyword for people on the allow list. Hands over to a person after a few replies.",
+  "scope": {
+    "allowlist": true,
+    "all_dms": false,
+    "chats": [],
+    "blocklist": []
+  },
+  "options": {
+    "timezone": "Asia/Singapore",
+    "cooldown_minutes": 240,
+    "quiet_hours": { "start": "23:00", "end": "07:00" },
+    "pause_after_manual_reply_minutes": 30,
+    "max_replies_per_contact_per_hour": 3,
+    "max_replies_per_contact_per_day": 10,
+    "conversation": {
+      "gap_minutes": 30,
+      "max_replies": 5,
+      "backoff_base_minutes": 1,
+      "handoff_text": "Thanks {first_name}, I'll get back to you personally on the rest."
+    },
+    "flood": { "max_messages": 8, "window_seconds": 60, "mute_minutes": 360 },
+    "loop": { "reply_within_seconds": 3, "streak": 3, "mute_minutes": 1440 }
+  },
+  "rules": [
+    {
+      "id": "hours",
+      "match": { "keywords": ["opening hours", "open today", "what time", "when are you open"], "keywords_mode": "any" },
+      "response": { "type": "text", "text": "We're open Monday to Friday, 09:00 to 18:00 (Singapore time)." }
+    },
+    {
+      "id": "price",
+      "match": { "keywords": ["price", "prices", "cost", "how much"], "keywords_mode": "any" },
+      "response": { "type": "text", "text": "Hi {first_name}, our current price list is at https://example.com/prices" }
+    },
+    {
+      "id": "order-status",
+      "match": { "regex": "\\border\\s*#?\\d{4,10}\\b" },
+      "response": { "type": "text", "text": "Thanks, I've seen your order number. I'll check its status and reply soon." }
+    },
+    {
+      "id": "thanks",
+      "match": { "exact": ["thanks", "thank you", "thx"] },
+      "response": { "type": "text", "text": "You're welcome!" },
+      "once_per_chat": true
+    }
+  ]
+}

@@ -1,5 +1,7 @@
 import { db } from './index.js'
 
+const SESSION_METADATA_KEY = '__fastifySessionMetadata'
+
 /**
  * SQLite-backed session store for @fastify/session.
  *
@@ -62,6 +64,43 @@ export class SqliteSessionStore {
     } catch (err) {
       callback(err)
     }
+  }
+
+  /**
+   * Save only if the stored session is still the one this request read.
+   * @fastify/session 11.2 requires it, and refuses to start without it, so two
+   * overlapping requests cannot silently overwrite each other's changes. The
+   * generation lives under the same key the library's own MemoryStore reads
+   * (lib/sessionMetadata.js), falling back to the session id.
+   */
+  compareAndSet(sid, expectedGeneration, session, callback) {
+    try {
+      const swapped = this.compareAndSetTx(sid, expectedGeneration, session)
+      if (!swapped) {
+        const error = new Error('The session does not exist or has changed')
+        error.code = 'ENOENT'
+        return callback(error)
+      }
+      callback()
+    } catch (err) {
+      callback(err)
+    }
+  }
+
+  get compareAndSetTx() {
+    // better-sqlite3 runs a transaction synchronously, so the read and the
+    // write cannot interleave with another request's.
+    this._casTx ??= db.transaction((sid, expectedGeneration, session) => {
+      const row = this.stmts.get.get(sid)
+      if (!row || row.expires_at <= Date.now()) return false
+      let stored
+      try { stored = JSON.parse(row.data) } catch (_) { return false }
+      const generation = stored?.[SESSION_METADATA_KEY]?.generation ?? sid
+      if (generation !== expectedGeneration) return false
+      this.stmts.set.run(sid, JSON.stringify(session), this.expiryFor(session))
+      return true
+    })
+    return this._casTx
   }
 
   destroy(sid, callback) {
