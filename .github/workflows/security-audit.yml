@@ -55,7 +55,7 @@ jobs:
       - run: cd server && npm ci
       - name: Server unit tests
         run: cd server && npm test
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.9'
       # 3.9 is the floor the CLI promises; run the suite on it so a newer
