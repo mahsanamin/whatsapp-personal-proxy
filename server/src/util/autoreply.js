@@ -62,7 +62,8 @@ export const DEFAULT_CONVERSATION = { gap_minutes: 30, max_replies: 5, backoff_b
 export const DEFAULT_FLOOD = { max_messages: 8, window_seconds: 60, mute_minutes: 360 }
 export const DEFAULT_LOOP = { reply_within_seconds: 3, streak: 3, mute_minutes: 1440 }
 export const HANDOFF_RULE_ID = '_handoff'
-const RULE_KEYS = ['id', 'match', 'response', 'cooldown_minutes', 'once_per_chat', 'quiet_hours', 'active_hours']
+const CONTACT_CAP_KEYS = ['max_replies_per_contact_per_hour', 'max_replies_per_contact_per_day']
+const RULE_KEYS = ['id', 'match', 'response', 'cooldown_minutes', 'once_per_chat', 'quiet_hours', 'active_hours', ...CONTACT_CAP_KEYS]
 const MATCH_KEYS = ['keywords', 'keywords_mode', 'exact', 'regex', 'types', 'chats', 'from']
 const RULE_ID = /^[A-Za-z0-9_-]{1,64}$/
 const CHAT_JID = /^(?:\d{5,20}@s\.whatsapp\.net|\d{1,30}@lid|[\d-]{5,60}@g\.us)$/
@@ -190,6 +191,17 @@ function ruleSetWarnings(ruleSet) {
     const texts = [rule.response?.text, rule.response?.fallback_text]
     if (texts.some(usesName)) {
       warnings.push({ path: `${path}.response`, message: 'This rule only answers unknown senders, so {name} and {first_name} render empty here' })
+    }
+  })
+  // A rule may allow one contact more replies than the set does. That is
+  // allowed, but it should be visible, so a raised cap is never an accident.
+  all.forEach((rule, i) => {
+    const path = rule === ruleSet.fallback ? 'fallback' : `rules[${i}]`
+    for (const key of CONTACT_CAP_KEYS) {
+      const setCap = ruleSet.options[key]
+      if (rule[key] !== undefined && setCap && rule[key] > setCap) {
+        warnings.push({ path: `${path}.${key}`, message: `This rule allows ${rule[key]}, more than the set's ${setCap}. The server's cap still applies` })
+      }
     }
   })
   if (reachesUnknown && usesName(ruleSet.options.conversation.handoff_text)) {
@@ -379,8 +391,8 @@ function validateSetOptions(options, fail) {
   if (active !== undefined) out.active_hours = active
   const pause = validateMinutes(options.pause_after_manual_reply_minutes, 'options.pause_after_manual_reply_minutes', fail)
   if (pause !== undefined) out.pause_after_manual_reply_minutes = pause
-  for (const key of ['max_replies_per_contact_per_hour', 'max_replies_per_contact_per_day']) {
-    const value = validateCount(options[key], `options.${key}`, fail, { min: 1, max: 1000 })
+  for (const key of CONTACT_CAP_KEYS) {
+    const value = validateContactCap(options[key], `options.${key}`, fail)
     if (value !== undefined) out[key] = value
   }
 
@@ -405,6 +417,8 @@ function validateSetOptions(options, fail) {
   })
   return out
 }
+
+const validateContactCap = (value, path, fail) => validateCount(value, path, fail, { min: 1, max: 1000 })
 
 function validateCount(value, path, fail, { min, max, fraction = false }) {
   if (value === undefined || value === null) return undefined
@@ -470,6 +484,10 @@ function validateRule(rule, path, fail, { requireMatch }) {
   if (quiet !== undefined) out.quiet_hours = quiet
   const active = validateHours(rule.active_hours, join(path, 'active_hours'), fail, { allowStatus: true })
   if (active !== undefined) out.active_hours = active
+  for (const key of CONTACT_CAP_KEYS) {
+    const value = validateContactCap(rule[key], join(path, key), fail)
+    if (value !== undefined) out[key] = value
+  }
 
   return out
 }
@@ -1009,12 +1027,19 @@ export function backoffMs(repliesSoFar, baseMinutes) {
   return baseMinutes * 60_000 * 2 ** Math.min(repliesSoFar - 1, 20)
 }
 
-/** The template may be stricter than the server's caps, never looser. */
-export function effectiveLimits(options, limits) {
-  const stricter = (template, server) => (template ? Math.min(template, server) : server)
+/**
+ * The caps for one decision. A per-contact cap comes from the matched rule,
+ * else the set, else the server, and the server's cap is always the ceiling:
+ * a template may be stricter than the server, never looser.
+ */
+export function effectiveLimits(options, limits, rule = null) {
+  const pick = (key, server) => {
+    const template = rule?.[key] ?? options[key]
+    return template ? Math.min(template, server) : server
+  }
   return {
-    perContactHour: stricter(options.max_replies_per_contact_per_hour, limits.maxPerChatPerHour),
-    perContactDay: stricter(options.max_replies_per_contact_per_day, limits.maxPerChatPerDay),
+    perContactHour: pick('max_replies_per_contact_per_hour', limits.maxPerChatPerHour),
+    perContactDay: pick('max_replies_per_contact_per_day', limits.maxPerChatPerDay),
     perHour: limits.maxPerHour,
     minGapMs: limits.minGapSeconds * 1000,
   }
@@ -1034,7 +1059,8 @@ export function effectiveLimits(options, limits) {
  *   lastReplyAt                        any reply to this contact
  *   ruleLastReplyAt: { [ruleId]: ms }, rulesReplied: [ruleId]
  *   sameTextRuleIds: [ruleId]          rules that already answered this text this conversation
- *   contactRepliesLastHour, contactRepliesLastDay, globalRepliesLastHour
+ *   contactRepliesLastHour, contactRepliesLastDay   replies from every rule, not just the matched one
+ *   globalRepliesLastHour
  * `limits` are the server's caps: { minGapSeconds, maxPerChatPerHour, maxPerChatPerDay, maxPerHour }.
  *
  * Returns { action: 'reply' | 'skip' | 'mute', reason, rule, text, mute }.
@@ -1046,7 +1072,6 @@ export function decide({ ruleSet, message, nowMs, stats = {}, limits }) {
   const options = ruleSet.options
   const skip = (reason, rule = null) => ({ action: 'skip', reason, rule, text: null, mute: null })
   const mute = (target, minutes, reason) => ({ action: 'mute', reason, rule: null, text: null, mute: { target, minutes, reason } })
-  const caps = effectiveLimits(options, limits)
 
   for (const muted of [stats.contactMute, stats.senderMute]) {
     if (muted?.until && muted.until > nowMs) return skip(`muted:${muted.reason || 'manual'}`)
@@ -1083,6 +1108,10 @@ export function decide({ ruleSet, message, nowMs, stats = {}, limits }) {
   const quiet = rule.quiet_hours !== undefined ? rule.quiet_hours : options.quiet_hours
   if (quiet && findWindow(quiet, clock)) return skip('quiet_hours', rule)
   const render = { ...message, nowMs, timezone: options.timezone }
+
+  // The counts are this contact's replies from every rule. Only the cap they
+  // are held to depends on which rule matched.
+  const caps = effectiveLimits(options, limits, rule)
 
   // Limits that apply to any reply, the handoff included.
   const sharedLimit = () => {

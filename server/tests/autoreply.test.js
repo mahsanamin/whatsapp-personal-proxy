@@ -524,6 +524,93 @@ test('contact budgets can only be stricter than the server caps', () => {
   assert.equal(run(loose, 'price', { globalRepliesLastHour: 30 }).reason, 'global_hourly_limit')
 })
 
+// One contact (the "wife" case) may get more replies than everyone else: the
+// server cap is raised to 5, the set keeps everyone at 3, her rule allows 5.
+const RAISED = { ...LIMITS_DEFAULT, maxPerChatPerHour: 5 }
+function perRuleCaps({ wifeHour = 5, wifeDay, setHour = 3 } = {}) {
+  return valid({
+    options: { cooldown_minutes: 0, conversation: { max_replies: 100, backoff_base_minutes: 0 }, max_replies_per_contact_per_hour: setHour },
+    rules: [
+      { id: 'wife', match: { chats: [PN] }, response: { type: 'text', text: 'Busy, back soon' }, max_replies_per_contact_per_hour: wifeHour, ...(wifeDay ? { max_replies_per_contact_per_day: wifeDay } : {}) },
+      { id: 'price', match: { keywords: ['price'] }, response: { type: 'text', text: 'Prices' } },
+    ],
+  })
+}
+
+test('contact caps are accepted per rule, with the same check as the set', () => {
+  const set = perRuleCaps({ wifeDay: 20 })
+  assert.equal(set.rules[0].max_replies_per_contact_per_hour, 5)
+  assert.equal(set.rules[0].max_replies_per_contact_per_day, 20)
+  assert.equal(set.rules[1].max_replies_per_contact_per_hour, undefined, 'a rule without a cap leaves it to the set')
+  const rule = (extra) => ({ rules: [{ id: 'a', match: { keywords: ['x'] }, response: { type: 'text', text: 'x' }, ...extra }] })
+  assert.match(errorsOf(rule({ max_replies_per_contact_per_hour: 0 })), /rules\[0\]\.max_replies_per_contact_per_hour: .*from 1 to 1000/)
+  assert.match(errorsOf(rule({ max_replies_per_contact_per_day: 2.5 })), /whole number/)
+  assert.match(errorsOf(rule({ max_replies_per_contact_per_day: 1001 })), /from 1 to 1000/)
+  const fallback = valid({ fallback: { id: 'fb', response: { type: 'text', text: 'x' }, max_replies_per_contact_per_day: 2 } })
+  assert.equal(fallback.fallback.max_replies_per_contact_per_day, 2)
+})
+
+test('a contact cap comes from the rule, else the set, else the server', () => {
+  const server = { ...LIMITS_DEFAULT, maxPerChatPerHour: 5, maxPerChatPerDay: 20 }
+  const options = { max_replies_per_contact_per_hour: 3, max_replies_per_contact_per_day: null }
+  assert.equal(effectiveLimits(options, server, { max_replies_per_contact_per_hour: 4 }).perContactHour, 4, 'the rule wins')
+  assert.equal(effectiveLimits(options, server, { id: 'plain' }).perContactHour, 3, 'then the set')
+  assert.equal(effectiveLimits(options, server).perContactHour, 3, 'no rule means the set')
+  assert.equal(effectiveLimits(options, server, { id: 'plain' }).perContactDay, 20, 'then the server')
+  assert.equal(effectiveLimits(options, server, { max_replies_per_contact_per_day: 7 }).perContactDay, 7, 'a rule alone works too')
+  assert.equal(effectiveLimits(options, server, { max_replies_per_contact_per_hour: 2 }).perContactHour, 2, 'a rule may be stricter than the set')
+})
+
+test('the server cap stays the ceiling for a rule cap', () => {
+  const server = { ...LIMITS_DEFAULT, maxPerChatPerHour: 3, maxPerChatPerDay: 10 }
+  const loose = { max_replies_per_contact_per_hour: 50, max_replies_per_contact_per_day: 500 }
+  assert.deepEqual(effectiveLimits({}, server, loose), { perContactHour: 3, perContactDay: 10, perHour: 30, minGapMs: 60_000 })
+  // Without raising the server cap, her rule's 5 is held at the server's 3.
+  const set = perRuleCaps()
+  assert.equal(run(set, 'hi', { contactRepliesLastHour: 3 }).reason, 'contact_hourly_limit')
+})
+
+test('one contact gets 5 replies an hour while everyone else stays at 3', () => {
+  const set = perRuleCaps()
+  const wife = (stats) => run(set, 'hi', stats, { limits: RAISED })
+  const other = (stats) => run(set, 'price', stats, { limits: RAISED, message: { chatAliases: [OTHER] } })
+
+  assert.equal(wife({ contactRepliesLastHour: 4 }).rule.id, 'wife')
+  assert.equal(wife({ contactRepliesLastHour: 4 }).action, 'reply')
+  assert.equal(wife({ contactRepliesLastHour: 5 }).reason, 'contact_hourly_limit')
+  assert.equal(other({ contactRepliesLastHour: 2 }).action, 'reply')
+  assert.equal(other({ contactRepliesLastHour: 3 }).reason, 'contact_hourly_limit', 'the set still holds everyone else to 3')
+  // Her own "price" message matches her rule first, so it is held to 5 as well.
+  assert.equal(run(set, 'price', { contactRepliesLastHour: 4 }, { limits: RAISED }).rule.id, 'wife')
+})
+
+test('the handoff is held to the matched rule\'s cap', () => {
+  const set = valid({
+    options: { max_replies_per_contact_per_hour: 3, conversation: { max_replies: 2, handoff_text: 'Later' } },
+    rules: [{ id: 'wife', match: { chats: [PN] }, response: { type: 'text', text: 'x' }, max_replies_per_contact_per_hour: 5 }],
+  })
+  const stats = { conversationReplies: 2, contactRepliesLastHour: 4 }
+  assert.equal(run(set, 'hi', stats, { limits: RAISED }).reason, 'conversation_cap_handoff')
+  assert.equal(run(set, 'hi', { ...stats, contactRepliesLastHour: 5 }, { limits: RAISED }).reason, 'contact_hourly_limit')
+})
+
+test('a rule cap above the set\'s is a warning, not an error', () => {
+  const result = validateRuleSet(template({
+    options: { max_replies_per_contact_per_hour: 3, max_replies_per_contact_per_day: 10 },
+    rules: [
+      { id: 'wife', match: { chats: [PN] }, response: { type: 'text', text: 'x' }, max_replies_per_contact_per_hour: 5, max_replies_per_contact_per_day: 10 },
+      { id: 'strict', match: { keywords: ['x'] }, response: { type: 'text', text: 'x' }, max_replies_per_contact_per_hour: 2 },
+    ],
+    fallback: { id: 'fb', response: { type: 'text', text: 'x' }, max_replies_per_contact_per_day: 12 },
+  }))
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.warnings.map(w => w.path), ['rules[0].max_replies_per_contact_per_hour', 'fallback.max_replies_per_contact_per_day'])
+  assert.match(result.warnings[0].message, /allows 5, more than the set's 3/)
+
+  const noSetCap = validateRuleSet(template({ rules: [{ id: 'a', match: { keywords: ['x'] }, response: { type: 'text', text: 'x' }, max_replies_per_contact_per_hour: 5 }] }))
+  assert.deepEqual(noSetCap.warnings, [], 'with no set cap there is nothing to compare against')
+})
+
 test('at the conversation cap the handoff is sent once, then silence', () => {
   const set = valid({ options: { conversation: { max_replies: 2, handoff_text: "I'll get back to you, {first_name}" } } })
   const handoff = run(set, 'price', { conversationReplies: 2 })

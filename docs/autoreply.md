@@ -299,6 +299,19 @@ a single rule, which then overrides the set value.
 | `once_per_chat` (per rule) | `false` | The rule answers a chat only once (within the 30-day log) |
 | `quiet_hours` (per rule) | none | `{ "start": "23:00", "end": "07:00" }`: never reply inside this window. Windows may cross midnight |
 | `active_hours` (per rule) | none | Only reply inside this window. Useful for an away message |
+| `pause_after_manual_reply_minutes` | `30` | After you write in a chat yourself, the bot stays out of it this long. `0` turns it off |
+| `max_replies_per_contact_per_hour` (per rule) | server cap | Replies one contact can get in an hour. Never more than the server's cap |
+| `max_replies_per_contact_per_day` (per rule) | server cap | Replies one contact can get in a day. Never more than the server's cap |
+| `conversation.gap_minutes` | `30` | A silence longer than this starts a new conversation |
+| `conversation.max_replies` | `5` | Replies allowed in one conversation |
+| `conversation.backoff_base_minutes` | `1` | Wait before the 2nd reply; it doubles for each one after (1, 2, 4, 8 minutes) |
+| `conversation.handoff_text` | none | Sent once when the cap is reached, then the bot is silent until the conversation ends or you reply |
+| `flood.max_messages` | `8` | More messages than this from one sender... |
+| `flood.window_seconds` | `60` | ...within this many seconds mutes them... |
+| `flood.mute_minutes` | `360` | ...for this long |
+| `loop.reply_within_seconds` | `3` | A reply that arrives this soon after ours counts as bot-like |
+| `loop.streak` | `3` | This many in a row means another bot... |
+| `loop.mute_minutes` | `1440` | ...and the contact is muted this long |
 
 Both hour options take one window or a list of up to 10. A window may also have:
 
@@ -317,19 +330,32 @@ Both hour options take one window or a list of up to 10. A window may also have:
   { "start": "09:30", "end": "18:30", "days": ["mon", "tue", "wed", "thu", "fri"], "status": "Alex is in the office" }
 ]
 ```
-| `pause_after_manual_reply_minutes` | `30` | After you write in a chat yourself, the bot stays out of it this long. `0` turns it off |
-| `max_replies_per_contact_per_hour` | server cap | Can only be lower than the server's cap |
-| `max_replies_per_contact_per_day` | server cap | Can only be lower than the server's cap |
-| `conversation.gap_minutes` | `30` | A silence longer than this starts a new conversation |
-| `conversation.max_replies` | `5` | Replies allowed in one conversation |
-| `conversation.backoff_base_minutes` | `1` | Wait before the 2nd reply; it doubles for each one after (1, 2, 4, 8 minutes) |
-| `conversation.handoff_text` | none | Sent once when the cap is reached, then the bot is silent until the conversation ends or you reply |
-| `flood.max_messages` | `8` | More messages than this from one sender... |
-| `flood.window_seconds` | `60` | ...within this many seconds mutes them... |
-| `flood.mute_minutes` | `360` | ...for this long |
-| `loop.reply_within_seconds` | `3` | A reply that arrives this soon after ours counts as bot-like |
-| `loop.streak` | `3` | This many in a row means another bot... |
-| `loop.mute_minutes` | `1440` | ...and the contact is muted this long |
+
+### Giving one contact more replies
+
+The cap used for a reply is the matched rule's value, else the set's value, else the
+server's cap. The server's cap (set in the console under limits) is always the ceiling, so
+a template can lower it but never raise it. The count is still per contact: every reply
+that person got in the last hour or day counts, from any rule and under both of their
+addresses, not only replies from the rule that matched.
+
+To let one person get 5 replies an hour while everyone else stays at 3, raise the
+server's per-contact hourly cap to 5 in the console, then:
+
+```json
+"options": { "max_replies_per_contact_per_hour": 3 },
+"rules": [
+  {
+    "id": "family",
+    "match": { "chats": ["15555550101@s.whatsapp.net"] },
+    "response": { "type": "text", "text": "Busy right now, back soon" },
+    "max_replies_per_contact_per_hour": 5
+  }
+]
+```
+
+Validation warns (it does not fail) when a rule's cap is higher than the set's, so the
+exception is visible when you upload the template.
 
 ## Safety rules that always apply
 

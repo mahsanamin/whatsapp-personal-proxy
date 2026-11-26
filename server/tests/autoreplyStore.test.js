@@ -69,6 +69,37 @@ test('a contact is one person across its LID and phone-number addresses', () => 
   assert.equal(snapshot.stats.contactRepliesLastHour, 2, 'replies under both addresses count together')
 })
 
+test('a per-rule cap is checked against the contact\'s replies from every rule, under both addresses', () => {
+  const caps = validateRuleSet({
+    ...TEMPLATE,
+    scope: { allowlist: true, chats: [PN, '15555550102@s.whatsapp.net'] },
+    options: { cooldown_minutes: 0, conversation: { max_replies: 100, backoff_base_minutes: 0 }, max_replies_per_contact_per_hour: 3 },
+    rules: [
+      { id: 'wife', match: { chats: [PN] }, response: { type: 'text', text: 'Back soon' }, max_replies_per_contact_per_hour: 5 },
+      ...TEMPLATE.rules,
+    ],
+  }).ruleSet
+  const raised = { ...LIMITS, maxPerChatPerHour: 5, minGapSeconds: 5 }
+  // Four replies, split across both addresses and across two rules.
+  store.logDecision({ at: NOW - 40 * 60_000, chat_jid: LID, ruleset_id: 'r', rule_id: 'wife', action: 'sent' })
+  store.logDecision({ at: NOW - 30 * 60_000, chat_jid: PN, ruleset_id: 'r', rule_id: 'price', action: 'sent' })
+  store.logDecision({ at: NOW - 20 * 60_000, chat_jid: LID, ruleset_id: 'r', rule_id: 'wife', action: 'sent' })
+  store.logDecision({ at: NOW - 10 * 60_000, chat_jid: PN, ruleset_id: 'r', rule_id: 'wife', action: 'sent' })
+
+  const check = () => {
+    const { stats } = store.contactSnapshot({ ruleSet: caps, rulesetId: 'r', chatJid: PN, senderJid: PN, text: 'hi', action: 'sent', nowMs: NOW })
+    return { stats, decision: decide({ ruleSet: caps, message: { type: 'text', text: 'hi', chatAliases: [PN, LID] }, nowMs: NOW, stats, limits: raised }) }
+  }
+  let { stats, decision } = check()
+  assert.equal(stats.contactRepliesLastHour, 4, 'one count for the person, not one per rule or per address')
+  assert.equal(decision.action, 'reply', 'the fifth reply is allowed')
+
+  store.logDecision({ at: NOW - 5 * 60_000, chat_jid: LID, ruleset_id: 'r', rule_id: 'price', action: 'sent' });
+  ({ stats, decision } = check())
+  assert.equal(stats.contactRepliesLastHour, 5)
+  assert.equal(decision.reason, 'contact_hourly_limit', 'a sixth is not, whichever rules sent the five')
+})
+
 test('dry runs and real sends are counted apart', () => {
   store.logDecision({ at: NOW - 1000, chat_jid: PN, ruleset_id: 'r', rule_id: 'price', action: 'dry_run' })
   const sent = store.contactSnapshot({ ruleSet, rulesetId: 'r', chatJid: PN, senderJid: PN, text: 'x', action: 'sent', nowMs: NOW })
