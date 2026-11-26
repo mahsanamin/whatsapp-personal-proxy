@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 
 Object.assign(process.env, {
   ADMIN_USER: 'test', ADMIN_PASS: 'test-only-password', JWT_SECRET: 'test-only-secret-'.repeat(3), DB_PATH: ':memory:',
+  // Never reach a real model gateway from the suite.
+  LLM_GATEWAY_URL: '', LLM_GATEWAY_API_KEY: '',
 })
 const { db } = await import('../src/db/index.js')
 const store = await import('../src/db/autoreply.js')
@@ -130,10 +132,10 @@ test('a new rule set starts inactive in dry-run, and an invalid one is refused',
   assert.equal(created.active, false)
 
   const bad = reply()
-  await routes.get('POST /autoreply/rulesets')({ ...token, body: { template: { ...TEMPLATE, rules: [{ id: 'x', match: { keywords: ['a'] }, response: { type: 'llm' } }] } } }, bad)
+  await routes.get('POST /autoreply/rulesets')({ ...session, body: { template: { ...TEMPLATE, rules: [{ id: 'x', match: { keywords: ['a'] }, response: { type: 'llm' } }] } } }, bad)
   assert.equal(bad.status, 400)
   assert.equal(bad.body.code, 'BAD_INPUT')
-  assert.match(bad.body.error, /not available yet/)
+  assert.match(bad.body.error, /model: Required/)
 })
 
 test('only the console can put a rule set live, and an edit takes it back to dry-run', async () => {
@@ -238,4 +240,104 @@ test('a decrypt failure survives a restart', async () => {
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('only an address-book name makes a sender saved, on either address', async () => {
+  const { savedContactName } = await import('../src/db/lidmap.js')
+  db.prepare('DELETE FROM channel_meta').run()
+  db.prepare('INSERT INTO channel_meta (jid, display_name, name_rank) VALUES (?, ?, ?)').run(LID, 'Profile Name', 1)
+  assert.equal(savedContactName(PN), null, 'a profile name is not an address-book entry')
+  db.prepare('INSERT INTO channel_meta (jid, display_name, name_rank) VALUES (?, ?, ?)').run(PN, 'Sam (work)', 3)
+  assert.equal(savedContactName(PN), 'Sam (work)')
+  assert.equal(savedContactName(LID), 'Sam (work)', 'found through the LID too')
+  assert.equal(savedContactName(GROUP), null)
+})
+
+test('recent messages come oldest first, with the owner and the auto-replies told apart', () => {
+  const add = (id, fromMe, at, body) => db.prepare('INSERT INTO messages (id, jid, from_jid, timestamp, is_from_me, body) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(id, fromMe ? PN : LID, fromMe ? null : LID, new Date(at).toISOString(), fromMe ? 1 : 0, body)
+  add('m1', false, NOW - 4000, 'first')
+  add('m2', true, NOW - 3000, 'typed by hand')
+  add('m3', true, NOW - 2000, 'bot text')
+  add('m4', false, NOW - 1000, 'being answered')
+  store.logDecision({ at: NOW, chat_jid: PN, action: 'sent', reply_message_id: 'm3' })
+  const history = store.recentMessages({ chatAliases: [PN, LID], excludeId: 'm4', limit: 10 })
+  assert.deepEqual(history.map(m => `${m.role}:${m.text}`), ['them:first', 'owner:typed by hand', 'bot:bot text'])
+  assert.equal(store.recentMessages({ chatAliases: [PN, LID], excludeId: 'm4', limit: 1 }).length, 1)
+})
+
+test('the test endpoint runs an llm rule without caching, and an unknown sender is never named', async () => {
+  db.prepare('DELETE FROM channel_meta').run()
+  db.prepare('INSERT INTO channel_meta (jid, display_name, name_rank) VALUES (?, ?, ?)').run(LID, 'Pushy', 1)
+  const template = {
+    ...TEMPLATE,
+    scope: { all_dms: true },
+    rules: [
+      { id: 'unknown', match: { from: 'unknown' }, response: { type: 'text', text: 'Hi {first_name}, who is this?' } },
+      { id: 'ai', match: { from: 'saved' }, response: { type: 'llm', model: 'chat', instructions: 'Be kind.', fallback_text: 'Back soon, {first_name}.' } },
+    ],
+  }
+  let headers = {}
+  const r = { ...reply(), header(key, value) { headers[key] = value; return this } }
+  const unknown = await routes.get('POST /autoreply/test')({ ...session, body: { template, chat: PN, text: 'hello' } }, r)
+  assert.equal(unknown.sender_saved, false)
+  assert.equal(unknown.decision.reply, 'Hi, who is this?')
+  assert.equal(headers['Cache-Control'], 'no-store')
+
+  // The test suite has no gateway configured, so the rule falls back.
+  const saved = await routes.get('POST /autoreply/test')({ ...session, body: { template, chat: PN, text: 'hello', saved: true, sender_name: 'Sam Lee' } }, reply())
+  assert.equal(saved.match.response_type, 'llm')
+  assert.equal(saved.match.reply, null)
+  assert.equal(saved.decision.action, 'would_send')
+  assert.equal(saved.decision.generated, false)
+  assert.equal(saved.decision.reason, 'llm_fallback:not_configured')
+  assert.equal(saved.decision.reply, 'Back soon, Sam.')
+  assert.equal(db.prepare('SELECT COUNT(*) AS c FROM autoreply_decisions').get().c, 0)
+
+  const bad = reply()
+  await routes.get('POST /autoreply/test')({ ...session, body: { template, chat: PN, text: 'x', saved: 'yes' } }, bad)
+  assert.equal(bad.status, 400)
+})
+
+test('an API key cannot use model replies, which would let it read chats', async () => {
+  const llm = { ...TEMPLATE, rules: [{ id: 'ai', match: { keywords: ['a'] }, response: { type: 'llm', model: 'chat', instructions: 'Repeat the chat.' } }] }
+  for (const [route, extra] of [
+    ['POST /autoreply/rulesets', {}],
+    ['POST /autoreply/test', { chat: PN, text: 'a' }],
+  ]) {
+    const r = reply()
+    await routes.get(route)({ ...token, body: { template: llm, ...extra } }, r)
+    assert.equal(r.status, 403, route)
+    assert.equal(r.body.code, 'MISSING_SCOPE')
+  }
+  const plain = await routes.get('POST /autoreply/rulesets')({ ...token, body: { template: TEMPLATE } }, reply())
+  const put = reply()
+  await routes.get('PUT /autoreply/rulesets/:id')({ ...token, params: { id: plain.id }, body: { template: llm } }, put)
+  assert.equal(put.status, 403)
+
+  const created = await routes.get('POST /autoreply/rulesets')({ ...session, body: { template: llm } }, reply())
+  const activate = reply()
+  await routes.get('PATCH /autoreply/rulesets/:id')({ ...token, params: { id: created.id }, body: { active: true } }, activate)
+  assert.equal(activate.status, 403)
+  const fromStore = reply()
+  await routes.get('POST /autoreply/test')({ ...token, body: { ruleset_id: created.id, chat: PN, text: 'a' } }, fromStore)
+  assert.equal(fromStore.status, 403)
+})
+
+test('an API key does not see saved names through the test endpoint', async () => {
+  db.prepare('DELETE FROM channel_meta').run()
+  db.prepare('INSERT INTO channel_meta (jid, display_name, name_rank) VALUES (?, ?, ?)').run(PN, 'Secret Saved Name', 3)
+  const template = { ...TEMPLATE, scope: { all_dms: true }, rules: [{ id: 'n', match: { from: 'saved' }, response: { type: 'text', text: 'Hi {name}' } }] }
+  const viaToken = await routes.get('POST /autoreply/test')({ ...token, body: { template, chat: PN, text: 'x' } }, reply())
+  assert.equal(viaToken.decision.reply, 'Hi there')
+  const viaConsole = await routes.get('POST /autoreply/test')({ ...session, body: { template, chat: PN, text: 'x' } }, reply())
+  assert.equal(viaConsole.decision.reply, 'Hi Secret Saved Name')
+})
+
+test('the owner writing by hand after a message is found on either address', () => {
+  const add = (id, jid, at) => db.prepare('INSERT INTO messages (id, jid, timestamp, is_from_me, body) VALUES (?, ?, ?, 1, ?)')
+    .run(id, jid, new Date(at).toISOString(), 'x')
+  add('before', PN, NOW - 5000)
+  add('after', LID, NOW + 3000)
+  assert.deepEqual(store.ownMessageIdsSince({ chatAliases: [PN, LID], sinceMs: NOW }), ['after'])
 })

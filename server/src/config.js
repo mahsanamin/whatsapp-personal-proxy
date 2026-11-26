@@ -70,4 +70,13 @@ export const config = {
     // Older than this and a message is history or catch-up, not a live one.
     maxAgeSeconds: Math.min(600, Math.max(30, parseInt(process.env.AUTOREPLY_MAX_AGE_S || '180', 10) || 180)),
   },
+  // OpenAI-compatible gateway for auto-reply rules whose reply a model
+  // writes. Unset means those rules send their fallback text. The timeout
+  // stays under the shortest history cut-off (30 s), because replies queue
+  // behind a model call.
+  llmGateway: {
+    url: (process.env.LLM_GATEWAY_URL || '').trim(),
+    apiKey: (process.env.LLM_GATEWAY_API_KEY || '').trim(),
+    timeoutMs: Math.min(30, Math.max(3, parseInt(process.env.LLM_GATEWAY_TIMEOUT_S || '15', 10) || 15)) * 1000,
+  },
 }

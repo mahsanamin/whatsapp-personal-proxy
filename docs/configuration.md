@@ -85,6 +85,16 @@ hour 1 to 100, per day 1 to 1,000, replies per hour overall 1 to 1,000, and mess
 
 Auto-reply itself is switched on from the console, not here, and is off on a new install.
 
+Rules whose reply a language model writes (`"type": "llm"`) call an OpenAI-compatible gateway:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LLM_GATEWAY_URL` | unset | Base URL ending in `/v1`. The server calls `{url}/chat/completions` |
+| `LLM_GATEWAY_API_KEY` | unset | Sent as a bearer token. Never logged |
+| `LLM_GATEWAY_TIMEOUT_S` | `15` | How long one model call may take (3 to 30). After that the rule's `fallback_text` is sent |
+
+Without a URL and key, "llm" rules send their `fallback_text`, or nothing if they have none.
+
 ## Paths
 
 Set by `docker-compose.yml`; only change them if you are running outside Docker.

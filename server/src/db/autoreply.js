@@ -233,6 +233,38 @@ export function isBotReply(messageId) {
   return Boolean(db.prepare('SELECT 1 FROM autoreply_decisions WHERE reply_message_id = ? LIMIT 1').get(messageId))
 }
 
+/**
+ * The latest messages of a chat (all its aliases), oldest first, for an LLM
+ * reply's context. `excludeId` is the message being answered.
+ * Each is { role: 'them' | 'owner' | 'bot', type, text }.
+ */
+export function recentMessages({ chatAliases, excludeId, limit }) {
+  if (!chatAliases.length || limit <= 0) return []
+  const rows = db.prepare(`
+    SELECT id, body, type, is_from_me FROM messages
+    WHERE jid IN (${placeholders(chatAliases)}) AND id != ?
+    ORDER BY timestamp DESC LIMIT ?
+  `).all(...chatAliases, excludeId || '', limit)
+  const own = rows.filter(r => r.is_from_me).map(r => r.id)
+  const bot = new Set(own.length
+    ? db.prepare(`SELECT reply_message_id AS id FROM autoreply_decisions WHERE reply_message_id IN (${placeholders(own)})`).all(...own).map(r => r.id)
+    : [])
+  return rows.reverse().map(r => ({
+    role: r.is_from_me ? (bot.has(r.id) ? 'bot' : 'owner') : 'them',
+    type: r.type,
+    text: r.body,
+  }))
+}
+
+/** Ids of the owner's messages in a chat (all its aliases) sent after a time. */
+export function ownMessageIdsSince({ chatAliases, sinceMs }) {
+  if (!chatAliases.length) return []
+  return db.prepare(`
+    SELECT id FROM messages
+    WHERE jid IN (${placeholders(chatAliases)}) AND is_from_me = 1 AND timestamp > ?
+  `).all(...chatAliases, new Date(sinceMs).toISOString()).map(r => r.id)
+}
+
 /** Incoming messages from one sender in one chat since a time, for flood detection. */
 export function countIncoming({ chatAliases, senderAliases, sinceMs }) {
   if (!chatAliases.length || !senderAliases.length) return 0

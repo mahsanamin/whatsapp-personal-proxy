@@ -27,7 +27,10 @@ back into `dry_run`**, so a change is always seen in the log before it sends.
 Only the web console can turn the global switch on or put a rule set live. An API key
 with `autoreply:manage` can create, edit, test and activate rule sets in `dry_run`, but
 it can never make the server send. That keeps API keys limited to the people their send
-scopes already allow.
+scopes already allow. Rule sets with a model-written reply (`"type": "llm"`) are console
+only as well, to create, edit, activate and test: the model is shown recent messages of
+the chat, so a key that could steer it could read chats it has no scope for. A key also
+never sees saved contact names in a test result.
 
 The safe way to start: upload a rule set, activate it in dry run, turn the global switch
 on, watch the decision log for a while, then switch the rule set to live.
@@ -118,7 +121,10 @@ the same person.
 ## Rules
 
 Rules are checked in order and the **first match wins**. If none matches, the optional
-`fallback` is used. Every condition a rule sets must hold:
+`fallback` is used. A rule whose `active_hours` do not hold right now is passed over, so
+the next rule gets its turn: a daily schedule is a list of rules, one per window. When
+nothing answers because of that, the log says `outside_active_hours`. `quiet_hours` work
+the other way: inside them the matching rule is skipped and nothing else is tried. Every condition a rule sets must hold:
 
 | Field | Meaning |
 |---|---|
@@ -128,6 +134,7 @@ Rules are checked in order and the **first match wins**. If none matches, the op
 | `regex` | A JavaScript pattern, case-insensitive. See the limits below |
 | `types` | Message types to answer. Default `["text"]`. Others: `image`, `video`, `doc`, `audio`, `voice`, `sticker`, `location`, `contact`, `album` |
 | `chats` | Only these chats (aliases included) |
+| `from` | `"saved"`: the sender is in your phone's address book. `"unknown"`: they are not. See "Saved and unknown senders" |
 
 A rule must have at least one condition. The fallback needs none; without a `match` it
 answers text messages only.
@@ -149,17 +156,81 @@ keywords are the better tool.
 
 | Placeholder | Becomes |
 |---|---|
-| `{name}` | The contact's name, or "there" if unknown |
-| `{first_name}` | The first word of the name, or "there" |
+| `{name}` | The name you saved the contact under. Empty for a sender who is not saved |
+| `{first_name}` | The first word of that name. Empty for a sender who is not saved |
 | `{date}` | Today as `YYYY-MM-DD` in the rule set's timezone |
 | `{time}` | Now as `HH:MM` in the rule set's timezone |
 
 Any other placeholder fails validation. There is no placeholder for the incoming
 message, on purpose: a reply never repeats what the sender wrote. Names are trimmed to
-40 characters on one line, because a contact chooses their own profile name.
+40 characters on one line.
 
-`"type": "llm"` is reserved for replies written by a language model. It is not available
-yet and validation says so.
+A sender's own profile name (the "pushName" they set in WhatsApp) is never put in a
+reply. When the sender is not saved, the name placeholders render empty and the
+punctuation around them is tidied, so `"Hi {first_name}, ..."` becomes `"Hi, ..."`.
+Validation warns when a `from: "unknown"` rule, or the handoff text of a set that has
+one, uses a name placeholder.
+
+### Replies written by a language model
+
+```json
+{
+  "type": "llm",
+  "model": "chat",
+  "instructions": "Write one or two warm lines about Alex in the third person.",
+  "context_messages": 10,
+  "max_chars": 400,
+  "fallback_text": "Alex will reply soon, {first_name}."
+}
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `model` | required | A model name the gateway serves, such as `chat` or `smart` |
+| `instructions` | required | How to write the reply, up to 4,000 characters |
+| `context_messages` | `10` | How many earlier messages of the chat the model sees (0 to 30) |
+| `max_chars` | `400` | The longest reply that may be sent (20 to 1,000). A longer answer is not cut, it is replaced by the fallback |
+| `fallback_text` | none | Sent when the model fails. Same placeholders as a text reply. Without it, a failure sends nothing |
+
+The model is given your instructions, the local day and time, the `status` of the
+`active_hours` window that matched (see "Options"), and the saved name of the contact if
+there is one. The incoming message and the earlier chat go in a separate message marked
+as other people's words, so text in a chat cannot change the instructions. The model
+only writes the text: who gets it, which rule applies and every limit are decided before
+it is asked. Its answer is cleaned (markdown, quotes and any "thinking" removed) and
+must be non-empty and within `max_chars`.
+
+The fallback is used when the gateway is not configured, does not answer within the
+timeout (15 seconds by default), returns an error, or the answer is empty or too long.
+The decision log's reason says which: `llm` for a written reply, `llm_fallback:<why>`
+when the fallback was sent, and `llm_failed:<why>` when there was no fallback and
+nothing was sent. `<why>` is one of `not_configured`, `timeout`, `network`, `http_<code>`,
+`bad_json`, `no_content`, `empty` or `too_long`.
+
+A model reply passes the same gates and limits as any other reply and counts as one
+send, logged at the time it was ready rather than when the message arrived. If you write
+in the chat by hand while the model is working, the reply is dropped
+(`manual_reply_pause`). In `dry_run` the model is called too, so the log shows what would
+have been sent. Replies are handled one at a time, so a slow gateway delays other
+auto-replies by up to the timeout, and a message that waited longer than "Ignore
+messages older than" is skipped as `too_old`. The gateway is set with `LLM_GATEWAY_URL` and `LLM_GATEWAY_API_KEY` (see
+`docs/configuration.md`).
+
+## Saved and unknown senders
+
+A sender is **saved** when your phone's address book has an entry for them. The server
+learns this from WhatsApp's contact sync, which carries the name you saved separately
+from the name the person set for themselves. Either of a person's two addresses counts.
+
+What to expect:
+
+- A contact you save on the phone while the server is linked syncs within moments.
+- A contact whose address-book entry never reached the server (for example, one saved
+  long before linking, if the initial sync missed it) counts as unknown, and gets
+  whatever your `from: "unknown"` rule says.
+- A contact you delete from the phone keeps counting as saved, because the sync gives no
+  reliable signal for a removal. Re-linking the device rebuilds the list.
+- In a group, the check applies to the person who wrote the message.
 
 ## Options
 
@@ -173,6 +244,24 @@ a single rule, which then overrides the set value.
 | `once_per_chat` (per rule) | `false` | The rule answers a chat only once (within the 30-day log) |
 | `quiet_hours` (per rule) | none | `{ "start": "23:00", "end": "07:00" }`: never reply inside this window. Windows may cross midnight |
 | `active_hours` (per rule) | none | Only reply inside this window. Useful for an away message |
+
+Both hour options take one window or a list of up to 10. A window may also have:
+
+- `days`: the weekdays it applies to, from `"mon"`, `"tue"`, `"wed"`, `"thu"`, `"fri"`,
+  `"sat"`, `"sun"`, in the rule set's timezone. Without it, every day. A window with
+  `days` and no `start` or `end` covers those whole days: `{ "days": ["sat", "sun"] }`. A window that
+  crosses midnight belongs to the day it **started**: `{ "start": "22:00", "end": "02:00",
+  "days": ["fri"] }` covers Saturday 01:00, but not Friday 01:00.
+- `status` (`active_hours` only): a short description of what you are doing in that
+  window, such as `"Alex is in the office"`. A model-written reply is given the status
+  of the window that matched, so one rule can cover several windows.
+
+```json
+"active_hours": [
+  { "start": "00:00", "end": "07:30", "days": ["mon", "tue", "wed", "thu", "fri"], "status": "Alex is asleep" },
+  { "start": "09:30", "end": "18:30", "days": ["mon", "tue", "wed", "thu", "fri"], "status": "Alex is in the office" }
+]
+```
 | `pause_after_manual_reply_minutes` | `30` | After you write in a chat yourself, the bot stays out of it this long. `0` turns it off |
 | `max_replies_per_contact_per_hour` | server cap | Can only be lower than the server's cap |
 | `max_replies_per_contact_per_day` | server cap | Can only be lower than the server's cap |
@@ -258,7 +347,9 @@ reason and end time. You can mute a contact for 24 hours or unmute it there.
 ## The decision log
 
 Every decision about a message in scope is logged: the time, chat, rule set, rule, the
-action (`sent`, `dry_run`, `skipped`, `failed`), the reason, and the reply text. Skip
+action (`sent`, `dry_run`, `skipped`, `failed`), the reason, and the reply text. A
+model-written reply is logged the same way; the prompt and the chat sent to the model
+are not. Skip
 reasons include `no_match`, `quiet_hours`, `outside_active_hours`, `once_per_chat`,
 `cooldown`, `duplicate_text`, `backoff`, `min_gap`, `contact_hourly_limit`,
 `contact_daily_limit`, `global_hourly_limit`, `conversation_cap`, `manual_reply_pause`,
@@ -284,3 +375,8 @@ curl -H "Authorization: Bearer sk_..." -H "Content-Type: application/json" \
      -d '{"ruleset_id":"<id>","chat":"+15555550100","text":"how much is it?"}' \
      https://wpp.example.com/api/autoreply/test
 ```
+
+The test uses the address book to decide whether the chat is a saved sender. Add
+`"saved": true` or `"saved": false` to try the other case, and `"sender_name"` to set
+the saved name. A rule with an "llm" reply really calls the model:
+`decision.generated` says whether the text came from it, and `decision.reason` why not.

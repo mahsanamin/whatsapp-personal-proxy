@@ -100,6 +100,30 @@ export function resolveNames(jids) {
 }
 
 /**
+ * The name the owner saved this person under in the phone's address book, or
+ * null when they are not saved (as far as this server has synced).
+ *
+ * Only an address-book name is stored at name_rank 3: it comes from the
+ * contact's app-state sync (contactAction), while profile names (pushName)
+ * are rank 1 and chat names rank 2. A contact saved on the phone whose
+ * app-state entry has not synced here reads as not saved.
+ */
+export function savedContactName(jid) {
+  const aliases = expandJids(jid)
+  if (!aliases.length || jid.endsWith('@g.us')) return null
+  try {
+    const row = db.prepare(
+      `SELECT display_name FROM channel_meta
+       WHERE jid IN (${aliases.map(() => '?').join(',')}) AND name_rank >= 3 AND display_name IS NOT NULL
+       ORDER BY CASE WHEN jid = ? THEN 0 ELSE 1 END LIMIT 1`
+    ).get(...aliases, canonicalJid(jid))
+    return row?.display_name || null
+  } catch (_) {
+    return null
+  }
+}
+
+/**
  * Rebuild lid_map from message keys already on disk, and propagate contact
  * names across every pair it learns.
  *

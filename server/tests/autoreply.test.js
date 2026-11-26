@@ -87,9 +87,11 @@ test('unknown fields are reported so typos do not silently do nothing', () => {
   assert.match(errorsOf({ rules: [{ id: 'a', match: { keyword: ['x'] }, response: { type: 'text', text: 'x' } }] }), /keyword: Unknown field/)
 })
 
-test('an llm response is reserved and refused for now', () => {
+test('an llm response needs a model and instructions, and unknown fields are refused', () => {
   const errors = errorsOf({ rules: [{ id: 'a', match: { keywords: ['x'] }, response: { type: 'llm', prompt: 'hi' } }] })
-  assert.match(errors, /"llm" is not available yet/)
+  assert.match(errors, /prompt: Unknown field/)
+  assert.match(errors, /model: Required/)
+  assert.match(errors, /instructions: Required/)
 })
 
 test('unknown placeholders are refused, and the incoming text has no placeholder at all', () => {

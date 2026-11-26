@@ -185,6 +185,7 @@ export default function AutoReply() {
   const [editingId, setEditingId] = useState(null)
   const [draft, setDraft] = useState(null)
   const [problems, setProblems] = useState([])
+  const [warnings, setWarnings] = useState([])
   const [validNote, setValidNote] = useState(null)
   const [saving, setSaving] = useState(false)
 
@@ -282,6 +283,7 @@ export default function AutoReply() {
   const validate = (text = draft) => run(async () => {
     const result = await api('/autoreply/validate', { method: 'POST', body: { template: text } })
     setProblems(result.errors)
+    setWarnings(result.warnings || [])
     setValidNote(result.valid
       ? `Valid: ${result.summary.rules} rule${result.summary.rules === 1 ? '' : 's'}${result.summary.fallback ? ' plus a fallback' : ''}`
       : null)
@@ -439,6 +441,13 @@ export default function AutoReply() {
               </ul>
             )}
             {validNote && <p className="mt-2 text-xs text-accent">{validNote}</p>}
+            {validNote && warnings.length > 0 && (
+              <ul className="mt-2 space-y-1 text-xs text-amber-300 bg-amber-950/30 border border-amber-900/40 rounded-lg px-3 py-2">
+                {warnings.map((w, i) => (
+                  <li key={i}><span className="font-mono text-amber-200">{w.path}</span>: {w.message}</li>
+                ))}
+              </ul>
+            )}
             <div className="mt-3 flex gap-2">
               <button onClick={() => validate()} className="text-xs border border-neutral-700 text-neutral-300 hover:text-white rounded-lg px-4 py-2">Validate</button>
               <button

@@ -158,8 +158,8 @@ errors come back as `400 BAD_INPUT` with the full list in `details: [{ path, mes
 | `PUT` | `/api/autoreply/rulesets/:id` | `autoreply:manage` | `{ template }`. A live rule set goes back to `dry_run` |
 | `PATCH` | `/api/autoreply/rulesets/:id` | `autoreply:manage` | `{ mode?, active? }`. Activating one deactivates the rest. Leaving a set active and `live` needs the console session, otherwise `403 MISSING_SCOPE` |
 | `DELETE` | `/api/autoreply/rulesets/:id` | `autoreply:manage` | The decision log is kept |
-| `POST` | `/api/autoreply/validate` | `autoreply:manage` | `{ template }` → `{ valid, errors, summary }` |
-| `POST` | `/api/autoreply/test` | `autoreply:manage` | `{ template \| ruleset_id, chat, text, type? }` → scope, matching rule, reply, and whether it would send now. Sends and logs nothing |
+| `POST` | `/api/autoreply/validate` | `autoreply:manage` | `{ template }` → `{ valid, errors, warnings, summary }` |
+| `POST` | `/api/autoreply/test` | `autoreply:manage` | `{ template \| ruleset_id, chat, text, type?, saved?, sender_name? }` → scope, whether the sender is saved, matching rule, reply, and whether it would send now. An "llm" rule calls the model (`decision.generated`); the response is `no-store`. Sends and logs nothing. 20 per minute. Rule sets with an "llm" reply are console only here and in the create, edit and activate routes |
 | `GET` | `/api/autoreply/decisions` | `autoreply:manage` | `?limit=` (max 500) `&ruleset_id=` |
 | `GET` | `/api/autoreply/contacts` | `autoreply:manage` | Per-contact replies, conversation count, mute state |
 | `POST` | `/api/autoreply/contacts/:jid/mute` | `autoreply:manage` | `{ minutes? }`, default 1440 |

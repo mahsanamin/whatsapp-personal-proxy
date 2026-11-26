@@ -36,7 +36,17 @@ export const LIMITS = {
   maxRegexInputChars: 500,
   maxResponseChars: 4096,
   maxNameChars: 40,
+  maxWindows: 10,
+  maxStatusChars: 200,
+  maxInstructionsChars: 4000,
 }
+
+export const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
+export const SENDER_KINDS = ['saved', 'unknown']
+export const LLM_DEFAULTS = { context_messages: 10, max_chars: 400 }
+const LLM_KEYS = ['type', 'model', 'instructions', 'context_messages', 'max_chars', 'fallback_text']
+const LLM_MODEL = /^[A-Za-z0-9._:/-]{1,64}$/
+const NAME_PLACEHOLDERS = ['name', 'first_name']
 
 const PLACEHOLDERS = ['name', 'first_name', 'date', 'time']
 const RESPONSE_TYPES = ['text', 'llm']
@@ -53,7 +63,7 @@ export const DEFAULT_FLOOD = { max_messages: 8, window_seconds: 60, mute_minutes
 export const DEFAULT_LOOP = { reply_within_seconds: 3, streak: 3, mute_minutes: 1440 }
 export const HANDOFF_RULE_ID = '_handoff'
 const RULE_KEYS = ['id', 'match', 'response', 'cooldown_minutes', 'once_per_chat', 'quiet_hours', 'active_hours']
-const MATCH_KEYS = ['keywords', 'keywords_mode', 'exact', 'regex', 'types', 'chats']
+const MATCH_KEYS = ['keywords', 'keywords_mode', 'exact', 'regex', 'types', 'chats', 'from']
 const RULE_ID = /^[A-Za-z0-9_-]{1,64}$/
 const CHAT_JID = /^(?:\d{5,20}@s\.whatsapp\.net|\d{1,30}@lid|[\d-]{5,60}@g\.us)$/
 const CLOCK = /^([01]\d|2[0-3]):([0-5]\d)$/
@@ -80,22 +90,22 @@ export function validateRuleSet(input) {
   if (typeof input === 'string') {
     if (Buffer.byteLength(input, 'utf8') > LIMITS.maxTemplateBytes) {
       fail('', `Template is larger than ${LIMITS.maxTemplateBytes / 1024} KB`)
-      return { ok: false, errors, ruleSet: null }
+      return { ok: false, errors, warnings: [], ruleSet: null }
     }
     try {
       doc = JSON.parse(input)
     } catch (err) {
       fail('', `Not valid JSON: ${err.message}`)
-      return { ok: false, errors, ruleSet: null }
+      return { ok: false, errors, warnings: [], ruleSet: null }
     }
   } else if (isPlainObject(input) && Buffer.byteLength(JSON.stringify(input), 'utf8') > LIMITS.maxTemplateBytes) {
     fail('', `Template is larger than ${LIMITS.maxTemplateBytes / 1024} KB`)
-    return { ok: false, errors, ruleSet: null }
+    return { ok: false, errors, warnings: [], ruleSet: null }
   }
 
   if (!isPlainObject(doc)) {
     fail('', 'Template must be a JSON object')
-    return { ok: false, errors, ruleSet: null }
+    return { ok: false, errors, warnings: [], ruleSet: null }
   }
 
   unknownKeys(doc, TOP_LEVEL_KEYS, '', fail)
@@ -136,12 +146,35 @@ export function validateRuleSet(input) {
     seen.add(id)
   }
 
-  if (errors.length) return { ok: false, errors, ruleSet: null }
-  return {
-    ok: true,
-    errors: [],
-    ruleSet: { format: FORMAT_VERSION, name, version, description, scope, options, rules, fallback },
+  if (errors.length) return { ok: false, errors, warnings: [], ruleSet: null }
+  const ruleSet = { format: FORMAT_VERSION, name, version, description, scope, options, rules, fallback }
+  return { ok: true, errors: [], warnings: ruleSetWarnings(ruleSet), ruleSet }
+}
+
+const usesName = (text) => typeof text === 'string' && NAME_PLACEHOLDERS.some(key => text.includes(`{${key}}`))
+
+/**
+ * Things that are allowed but probably not meant. A sender who is not in the
+ * address book is never named (their profile name is their own choice), so a
+ * name placeholder in a reply they can receive renders empty.
+ */
+function ruleSetWarnings(ruleSet) {
+  const warnings = []
+  const all = [...ruleSet.rules, ...(ruleSet.fallback ? [ruleSet.fallback] : [])]
+  let reachesUnknown = false
+  all.forEach((rule, i) => {
+    const path = rule === ruleSet.fallback ? 'fallback' : `rules[${i}]`
+    if (rule.match?.from !== 'unknown') return
+    reachesUnknown = true
+    const texts = [rule.response?.text, rule.response?.fallback_text]
+    if (texts.some(usesName)) {
+      warnings.push({ path: `${path}.response`, message: 'This rule only answers unknown senders, so {name} and {first_name} render empty here' })
+    }
+  })
+  if (reachesUnknown && usesName(ruleSet.options.conversation.handoff_text)) {
+    warnings.push({ path: 'options.conversation.handoff_text', message: 'Unknown senders can get the handoff, and {name} and {first_name} render empty for them' })
   }
+  return warnings
 }
 
 function unknownKeys(obj, allowed, path, fail) {
@@ -212,24 +245,65 @@ function validateChats(chats, path, fail) {
   return out
 }
 
-function validateHours(value, path, fail) {
+/**
+ * One window or a list of them, normalized to a list. Each window may name the
+ * days it applies to; a window that crosses midnight belongs to the day it
+ * started. Active-hours windows may carry a status for an LLM reply.
+ */
+function validateHours(value, path, fail, { allowStatus = false } = {}) {
   if (value === undefined) return undefined
   if (value === null) return null
+  const list = Array.isArray(value) ? value : [value]
+  if (list.length === 0 || list.length > LIMITS.maxWindows) {
+    fail(path, `Must be a window or a list of 1 to ${LIMITS.maxWindows} windows`)
+    return null
+  }
+  const out = []
+  list.forEach((window, i) => {
+    const at = Array.isArray(value) ? `${path}[${i}]` : path
+    const parsed = validateWindow(window, at, fail, allowStatus)
+    if (parsed) out.push(parsed)
+  })
+  return out.length === list.length ? out : null
+}
+
+function validateWindow(value, path, fail, allowStatus) {
+  const keys = allowStatus ? ['start', 'end', 'days', 'status'] : ['start', 'end', 'days']
   if (!isPlainObject(value)) {
-    fail(path, 'Must be { "start": "HH:MM", "end": "HH:MM" }')
+    fail(path, 'Must be { "start": "HH:MM", "end": "HH:MM" }, optionally with "days"')
     return null
   }
-  unknownKeys(value, ['start', 'end'], path, fail)
-  const ok = CLOCK.test(value.start) && CLOCK.test(value.end)
-  if (!ok) {
-    fail(path, 'start and end must be 24-hour times such as "22:00"')
-    return null
+  unknownKeys(value, keys, path, fail)
+  // Days alone mean the whole of those days.
+  const allDay = value.start === undefined && value.end === undefined && value.days !== undefined
+  if (!allDay) {
+    const ok = CLOCK.test(value.start) && CLOCK.test(value.end)
+    if (!ok) {
+      fail(path, 'start and end must be 24-hour times such as "22:00"')
+      return null
+    }
+    if (value.start === value.end) {
+      fail(path, 'start and end must differ')
+      return null
+    }
   }
-  if (value.start === value.end) {
-    fail(path, 'start and end must differ')
-    return null
+  const out = allDay ? { start: null, end: null, days: null } : { start: value.start, end: value.end, days: null }
+  if (value.days !== undefined && value.days !== null) {
+    const days = Array.isArray(value.days) ? value.days.map(d => (typeof d === 'string' ? d.toLowerCase() : d)) : null
+    if (!days || days.length === 0 || days.some(d => !WEEKDAYS.includes(d))) {
+      fail(join(path, 'days'), `Must be a non-empty list of: ${WEEKDAYS.join(', ')}`)
+      return null
+    }
+    out.days = [...new Set(days)]
   }
-  return { start: value.start, end: value.end }
+  if (value.status !== undefined) {
+    if (typeof value.status !== 'string' || !value.status.trim() || value.status.length > LIMITS.maxStatusChars) {
+      fail(join(path, 'status'), `Must be text of up to ${LIMITS.maxStatusChars} characters`)
+      return null
+    }
+    out.status = value.status.trim()
+  }
+  return out
 }
 
 function validateMinutes(value, path, fail, { min = 0, max = 60 * 24 * 30 } = {}) {
@@ -280,7 +354,7 @@ function validateSetOptions(options, fail) {
   if (once !== undefined) out.once_per_chat = once
   const quiet = validateHours(options.quiet_hours, 'options.quiet_hours', fail)
   if (quiet !== undefined) out.quiet_hours = quiet
-  const active = validateHours(options.active_hours, 'options.active_hours', fail)
+  const active = validateHours(options.active_hours, 'options.active_hours', fail, { allowStatus: true })
   if (active !== undefined) out.active_hours = active
   const pause = validateMinutes(options.pause_after_manual_reply_minutes, 'options.pause_after_manual_reply_minutes', fail)
   if (pause !== undefined) out.pause_after_manual_reply_minutes = pause
@@ -373,7 +447,7 @@ function validateRule(rule, path, fail, { requireMatch }) {
   if (once !== undefined) out.once_per_chat = once
   const quiet = validateHours(rule.quiet_hours, join(path, 'quiet_hours'), fail)
   if (quiet !== undefined) out.quiet_hours = quiet
-  const active = validateHours(rule.active_hours, join(path, 'active_hours'), fail)
+  const active = validateHours(rule.active_hours, join(path, 'active_hours'), fail, { allowStatus: true })
   if (active !== undefined) out.active_hours = active
 
   return out
@@ -385,7 +459,7 @@ function validateMatch(match, path, fail, { requireCondition }) {
     return null
   }
   unknownKeys(match, MATCH_KEYS, path, fail)
-  const out = { keywords: [], keywords_mode: 'any', exact: [], regex: null, types: ['text'], chats: [] }
+  const out = { keywords: [], keywords_mode: 'any', exact: [], regex: null, types: ['text'], chats: [], from: null }
 
   if (match.keywords !== undefined) {
     if (!Array.isArray(match.keywords) || match.keywords.length === 0) {
@@ -438,10 +512,15 @@ function validateMatch(match, path, fail, { requireCondition }) {
 
   if (match.chats !== undefined) out.chats = validateChats(match.chats, join(path, 'chats'), fail)
 
+  if (match.from !== undefined) {
+    if (!SENDER_KINDS.includes(match.from)) fail(join(path, 'from'), 'Must be "saved" or "unknown"')
+    else out.from = match.from
+  }
+
   const hasCondition = out.keywords.length || out.exact.length || out.regex ||
-    match.types !== undefined || out.chats.length
+    match.types !== undefined || out.chats.length || out.from
   if (requireCondition && !hasCondition) {
-    fail(path, 'Needs at least one of keywords, exact, regex, types or chats. Use "fallback" to answer everything else')
+    fail(path, 'Needs at least one of keywords, exact, regex, types, chats or from. Use "fallback" to answer everything else')
   }
   return out
 }
@@ -452,28 +531,58 @@ function validateResponse(response, path, fail) {
     return null
   }
   if (!RESPONSE_TYPES.includes(response.type)) {
-    fail(join(path, 'type'), 'Must be "text"')
+    fail(join(path, 'type'), 'Must be "text" or "llm"')
     return null
   }
-  if (response.type === 'llm') {
-    // Reserved so templates written for it later keep the same shape.
-    fail(join(path, 'type'), 'Response type "llm" is not available yet. Use "text" for now')
-    return null
-  }
+  if (response.type === 'llm') return validateLlmResponse(response, path, fail)
   unknownKeys(response, ['type', 'text'], path, fail)
-  if (typeof response.text !== 'string' || !response.text.trim()) {
-    fail(join(path, 'text'), 'Required text')
+  const text = validateReplyText(response.text, join(path, 'text'), fail)
+  return text === null ? null : { type: 'text', text }
+}
+
+function validateReplyText(text, path, fail) {
+  if (typeof text !== 'string' || !text.trim()) {
+    fail(path, 'Required text')
     return null
   }
-  if (response.text.length > LIMITS.maxResponseChars) {
-    fail(join(path, 'text'), `At most ${LIMITS.maxResponseChars} characters`)
+  if (text.length > LIMITS.maxResponseChars) {
+    fail(path, `At most ${LIMITS.maxResponseChars} characters`)
   }
-  for (const [, key] of response.text.matchAll(/\{([^{}\s]*)\}/g)) {
+  for (const [, key] of text.matchAll(/\{([^{}\s]*)\}/g)) {
     if (!PLACEHOLDERS.includes(key)) {
-      fail(join(path, 'text'), `Unknown placeholder {${key}}. Available: ${PLACEHOLDERS.map(p => `{${p}}`).join(', ')}`)
+      fail(path, `Unknown placeholder {${key}}. Available: ${PLACEHOLDERS.map(p => `{${p}}`).join(', ')}`)
     }
   }
-  return { type: 'text', text: response.text }
+  return text
+}
+
+/**
+ * A reply written by a language model. The template sets the model and the
+ * owner's instructions; the model only ever writes the text.
+ */
+function validateLlmResponse(response, path, fail) {
+  unknownKeys(response, LLM_KEYS, path, fail)
+  const out = { type: 'llm', model: null, instructions: null, ...LLM_DEFAULTS, fallback_text: null }
+  if (typeof response.model !== 'string' || !LLM_MODEL.test(response.model)) {
+    fail(join(path, 'model'), 'Required: the gateway model name, such as "chat" or "smart"')
+  } else {
+    out.model = response.model
+  }
+  if (typeof response.instructions !== 'string' || !response.instructions.trim()) {
+    fail(join(path, 'instructions'), 'Required text: how the model should write the reply')
+  } else if (response.instructions.length > LIMITS.maxInstructionsChars) {
+    fail(join(path, 'instructions'), `At most ${LIMITS.maxInstructionsChars} characters`)
+  } else {
+    out.instructions = response.instructions.trim()
+  }
+  const context = validateCount(response.context_messages, join(path, 'context_messages'), fail, { min: 0, max: 30 })
+  if (context !== undefined) out.context_messages = context
+  const maxChars = validateCount(response.max_chars, join(path, 'max_chars'), fail, { min: 20, max: 1000 })
+  if (maxChars !== undefined) out.max_chars = maxChars
+  if (response.fallback_text !== undefined && response.fallback_text !== null) {
+    out.fallback_text = validateReplyText(response.fallback_text, join(path, 'fallback_text'), fail)
+  }
+  return out.model && out.instructions ? out : null
 }
 
 // ─── Regex safety ────────────────────────────────────────────────────
@@ -624,34 +733,39 @@ export function normalizeExact(text) {
 
 /**
  * The first rule whose every condition holds, then the fallback.
- * `message` is { type, text, chatAliases }. Returns the rule or null.
+ * `message` is { type, text, chatAliases, senderSaved }. `eligible` can pass
+ * over a rule whose conditions hold, so the next one gets its turn.
+ * Returns the rule or null.
  */
-export function findMatchingRule(ruleSet, message) {
+export function findMatchingRule(ruleSet, message, eligible = () => true) {
   const text = String(message.text ?? '').slice(0, LIMITS.maxMatchChars)
   const words = ` ${normalizeWords(text)} `
   const exact = normalizeExact(text)
   const regexInput = text.slice(0, LIMITS.maxRegexInputChars)
   const aliases = message.chatAliases || []
+  const saved = Boolean(message.senderSaved)
+  const input = { type: message.type, words, exact, regexInput, aliases, saved }
 
   for (const rule of ruleSet.rules) {
-    if (ruleMatches(rule.match, { type: message.type, words, exact, regexInput, aliases })) return rule
+    if (ruleMatches(rule.match, input) && eligible(rule)) return rule
   }
   if (ruleSet.fallback) {
     // Without a match block the fallback answers text, not every sticker.
     const match = ruleSet.fallback.match || FALLBACK_MATCH
-    if (ruleMatches(match, { type: message.type, words, exact, regexInput, aliases })) {
+    if (ruleMatches(match, input) && eligible(ruleSet.fallback)) {
       return ruleSet.fallback
     }
   }
   return null
 }
 
-const FALLBACK_MATCH = { keywords: [], keywords_mode: 'any', exact: [], regex: null, types: ['text'], chats: [] }
+const FALLBACK_MATCH = { keywords: [], keywords_mode: 'any', exact: [], regex: null, types: ['text'], chats: [], from: null }
 
-function ruleMatches(match, { type, words, exact, regexInput, aliases }) {
+function ruleMatches(match, { type, words, exact, regexInput, aliases, saved }) {
   if (!match) return false
   if (!match.types.includes(type)) return false
   if (match.chats.length && !match.chats.some(jid => aliases.includes(jid))) return false
+  if (match.from && (match.from === 'saved') !== saved) return false
   if (match.keywords.length) {
     const hit = (kw) => words.includes(` ${kw} `)
     const ok = match.keywords_mode === 'all' ? match.keywords.every(hit) : match.keywords.some(hit)
@@ -796,14 +910,47 @@ export function localMinutes(nowMs, timezone) {
   return hour * 60 + minute
 }
 
-/** Whether a local time falls in a window; a window may wrap past midnight. */
-export function inWindow(minutes, window) {
-  const toMin = (clock) => Number(clock.slice(0, 2)) * 60 + Number(clock.slice(3))
-  const start = toMin(window.start)
-  const end = toMin(window.end)
-  return start < end
-    ? minutes >= start && minutes < end
-    : minutes >= start || minutes < end
+/** Minutes since local midnight and the local weekday ('mon'...) in a timezone. */
+export function localClock(nowMs, timezone) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23', weekday: 'short',
+  }).formatToParts(new Date(nowMs))
+  const value = (type) => parts.find(p => p.type === type).value
+  return {
+    minutes: Number(value('hour')) * 60 + Number(value('minute')),
+    day: value('weekday').slice(0, 3).toLowerCase(),
+  }
+}
+
+const toMinutes = (clock) => Number(clock.slice(0, 2)) * 60 + Number(clock.slice(3))
+
+/**
+ * Whether a local time falls in a window; a window may wrap past midnight.
+ * `day` is only needed when the window names days. The part of a window after
+ * midnight belongs to the day it started, so a Friday 22:00-02:00 window
+ * covers Saturday 01:00 and not Friday 01:00.
+ */
+export function inWindow(minutes, window, day = null) {
+  if (window.start === null) return !window.days || window.days.includes(day)
+  const start = toMinutes(window.start)
+  const end = toMinutes(window.end)
+  let startedOn = day
+  let inside
+  if (start < end) {
+    inside = minutes >= start && minutes < end
+  } else if (minutes >= start) {
+    inside = true
+  } else {
+    inside = minutes < end
+    if (day) startedOn = WEEKDAYS[(WEEKDAYS.indexOf(day) + 6) % 7]
+  }
+  if (!inside) return false
+  return !window.days || window.days.includes(startedOn)
+}
+
+/** The first window of a list that holds the given local clock, or null. */
+export function findWindow(windows, { minutes, day }) {
+  return (windows || []).find(window => inWindow(minutes, window, day)) || null
 }
 
 // ─── The decision ────────────────────────────────────────────────────
@@ -871,6 +1018,8 @@ export function effectiveLimits(options, limits) {
  *
  * Returns { action: 'reply' | 'skip' | 'mute', reason, rule, text, mute }.
  * 'mute' carries { target: 'contact' | 'sender', minutes, reason }.
+ * A reply from an "llm" rule has text null and carries
+ * generate: { status, fallbackText } for the caller to write it.
  */
 export function decide({ ruleSet, message, nowMs, stats = {}, limits }) {
   const options = ruleSet.options
@@ -894,14 +1043,25 @@ export function decide({ ruleSet, message, nowMs, stats = {}, limits }) {
     return skip('manual_reply_pause')
   }
 
-  const rule = findMatchingRule(ruleSet, message)
-  if (!rule) return skip('no_match')
+  // A rule outside its active hours is passed over, so a schedule can be
+  // written as one rule per window, each falling through to the next.
+  const clock = localClock(nowMs, options.timezone)
+  let outside = null
+  let window = null
+  const rule = findMatchingRule(ruleSet, message, (candidate) => {
+    const active = candidate.active_hours !== undefined ? candidate.active_hours : options.active_hours
+    window = active ? findWindow(active, clock) : null
+    if (active && !window) {
+      outside ||= candidate
+      return false
+    }
+    return true
+  })
+  if (!rule) return outside ? skip('outside_active_hours', outside) : skip('no_match')
 
-  const minutes = localMinutes(nowMs, options.timezone)
   const quiet = rule.quiet_hours !== undefined ? rule.quiet_hours : options.quiet_hours
-  if (quiet && inWindow(minutes, quiet)) return skip('quiet_hours', rule)
-  const active = rule.active_hours !== undefined ? rule.active_hours : options.active_hours
-  if (active && !inWindow(minutes, active)) return skip('outside_active_hours', rule)
+  if (quiet && findWindow(quiet, clock)) return skip('quiet_hours', rule)
+  const render = { ...message, nowMs, timezone: options.timezone }
 
   // Limits that apply to any reply, the handoff included.
   const sharedLimit = () => {
@@ -922,7 +1082,7 @@ export function decide({ ruleSet, message, nowMs, stats = {}, limits }) {
       action: 'reply',
       reason: 'conversation_cap_handoff',
       rule: handoff,
-      text: renderResponse(handoff.response, { ...message, nowMs, timezone: options.timezone }),
+      text: renderResponse(handoff.response, render),
       mute: null,
     }
   }
@@ -944,11 +1104,27 @@ export function decide({ ruleSet, message, nowMs, stats = {}, limits }) {
   const limited = sharedLimit()
   if (limited) return skip(limited, rule)
 
+  if (rule.response.type === 'llm') {
+    // The text is written after every limit has passed, by the caller, which
+    // owns the network. A model's output never decides anything here.
+    return {
+      action: 'reply',
+      reason: null,
+      rule,
+      text: null,
+      mute: null,
+      generate: {
+        status: window?.status || null,
+        fallbackText: rule.response.fallback_text ? renderText(rule.response.fallback_text, render) : null,
+      },
+    }
+  }
+
   return {
     action: 'reply',
     reason: null,
     rule,
-    text: renderResponse(rule.response, { ...message, nowMs, timezone: options.timezone }),
+    text: renderResponse(rule.response, render),
     mute: null,
   }
 }
@@ -964,21 +1140,61 @@ export function cleanName(name) {
   return [...cleaned].slice(0, LIMITS.maxNameChars).join('').trim()
 }
 
-export function renderResponse(response, { senderName, nowMs, timezone }) {
+export function renderResponse(response, context) {
   if (response.type !== 'text') throw new Error(`Unsupported response type ${response.type}`)
-  const name = cleanName(senderName)
+  return renderText(response.text, context)
+}
+
+/**
+ * Fill a reply's placeholders. A sender who is not in the address book
+ * (senderSaved false) is never named: their profile name is their own choice,
+ * so the name placeholders render empty and the punctuation around them is
+ * tidied ("Hi {first_name}, ok" becomes "Hi, ok").
+ */
+export function renderText(text, { senderName, senderSaved, nowMs, timezone }) {
+  const name = senderSaved === false ? '' : cleanName(senderName)
+  const neutral = senderSaved === false ? '' : 'there'
   const date = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(nowMs))
   const time = new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(nowMs))
   const values = {
-    name: name || 'there',
-    first_name: name.split(' ')[0] || 'there',
+    name: name || neutral,
+    first_name: name.split(' ')[0] || neutral,
     date,
     time,
   }
-  return response.text.replace(/\{(name|first_name|date|time)\}/g, (_, key) => values[key])
+  let blanked = false
+  const out = text.replace(/( ?)\{(name|first_name|date|time)\}/g, (_, space, key) => {
+    if (values[key]) return space + values[key]
+    blanked = true
+    return ''
+  })
+  if (!blanked) return out
+  return out
+    .replace(/[ \t]+([,.!?])/g, '$1')
+    .replace(/,([.!?])/g, '$1')
+    .replace(/^[ \t,]+/gm, '')
+    .replace(/[ \t]{2,}/g, ' ')
 }
 
 // ─── Who may change what ─────────────────────────────────────────────
+
+/** Whether any rule's reply is written by a model. */
+export function usesModel(ruleSet) {
+  return [...(ruleSet?.rules || []), ...(ruleSet?.fallback ? [ruleSet.fallback] : [])]
+    .some(rule => rule.response?.type === 'llm')
+}
+
+/**
+ * A model reply is written from the chat's recent messages, and the text ends
+ * up in the test result and the decision log. An API key with autoreply:manage
+ * must not be able to read chats that way (that is what channels:read is
+ * for), so rule sets with model replies are console only.
+ */
+export const MODEL_REFUSAL = {
+  status: 403,
+  error: 'Only the web console can manage rule sets whose replies a model writes',
+  code: 'MISSING_SCOPE',
+}
 
 /**
  * An API key may manage rule sets but must never be able to make the server

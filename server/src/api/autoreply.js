@@ -3,9 +3,10 @@ import { requireSession } from '../middleware/session.js'
 import { toJid } from '../util/jid.js'
 import { expandJids, canonicalJid, resolveNames } from '../db/lidmap.js'
 import { isOwnJid } from '../wa/client.js'
+import { senderIdentity, writeGeneratedReply } from '../wa/autoreply.js'
 import {
   MODES, MESSAGE_TYPES, validateRuleSet, findMatchingRule, renderResponse, scopeRefusal,
-  decide, stateChangeRefusal,
+  decide, stateChangeRefusal, usesModel, MODEL_REFUSAL,
 } from '../util/autoreply.js'
 import {
   isEnabled, setEnabled, listRuleSets, getRuleSet, createRuleSet, updateRuleSet,
@@ -37,6 +38,9 @@ function settings() {
   const { limits, defaults, overridden } = getServerLimits()
   return { enabled: isEnabled(), limits, defaults, overridden, bounds: LIMIT_BOUNDS }
 }
+
+const isSession = (request) => Boolean(request.session?.authenticated)
+const refuse = (reply, refusal) => reply.code(refusal.status).send({ error: refusal.error, code: refusal.code })
 
 const notFound = (reply) => reply.code(404).send({ error: 'Rule set not found', code: 'NOT_FOUND' })
 
@@ -76,6 +80,7 @@ export default async function autoreplyRoutes(fastify) {
     }
     const { ok, errors, ruleSet } = validateRuleSet(text)
     if (!ok) return invalid(reply, errors)
+    if (usesModel(ruleSet) && !isSession(request)) return refuse(reply, MODEL_REFUSAL)
     return reply.code(201).send(createRuleSet(text, ruleSet))
   })
 
@@ -101,6 +106,7 @@ export default async function autoreplyRoutes(fastify) {
     }
     const { ok, errors, ruleSet } = validateRuleSet(text)
     if (!ok) return invalid(reply, errors)
+    if (usesModel(ruleSet) && !isSession(request)) return refuse(reply, MODEL_REFUSAL)
     return updateRuleSet(request.params.id, text, ruleSet)
   })
 
@@ -124,11 +130,13 @@ export default async function autoreplyRoutes(fastify) {
       current,
       next: { mode, active },
     })
-    if (refusal) return reply.code(refusal.status).send({ error: refusal.error, code: refusal.code })
+    if (refusal) return refuse(reply, refusal)
 
-    if (active === true && !validateRuleSet(current.template).ok) {
+    const checked = validateRuleSet(current.template)
+    if (active === true && !checked.ok) {
       return reply.code(400).send({ error: 'Fix the template before activating it', code: 'BAD_INPUT' })
     }
+    if (active === true && usesModel(checked.ruleSet) && !isSession(request)) return refuse(reply, MODEL_REFUSAL)
     return setRuleSetState(current.id, { mode, active })
   })
 
@@ -142,18 +150,24 @@ export default async function autoreplyRoutes(fastify) {
     if (text === null) {
       return reply.code(400).send({ error: 'Field "template" required (JSON text or object)', code: 'BAD_INPUT' })
     }
-    const { ok, errors, ruleSet } = validateRuleSet(text)
+    const { ok, errors, warnings, ruleSet } = validateRuleSet(text)
     return {
       valid: ok,
       errors,
+      warnings,
       summary: ok
         ? { name: ruleSet.name, version: ruleSet.version, rules: ruleSet.rules.length, fallback: Boolean(ruleSet.fallback), scope: ruleSet.scope }
         : null,
     }
   })
 
-  // Simulate one incoming message. Nothing is sent and nothing is logged.
-  fastify.post('/autoreply/test', { preHandler: manage }, async (request, reply) => {
+  // Simulate one incoming message. Nothing is sent and nothing is logged. An
+  // "llm" rule does call the model, so the reply is fresh every time.
+  fastify.post('/autoreply/test', {
+    preHandler: manage,
+    // A test of an "llm" rule calls the model gateway, which costs money.
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+  }, async (request, reply) => {
     const body = request.body || {}
     const chatJid = toJid(body.chat)
     if (!chatJid) {
@@ -166,6 +180,9 @@ export default async function autoreplyRoutes(fastify) {
     if (!MESSAGE_TYPES.includes(type)) {
       return reply.code(400).send({ error: `Field "type" must be one of ${MESSAGE_TYPES.join(', ')}`, code: 'BAD_INPUT' })
     }
+    if (body.saved !== undefined && typeof body.saved !== 'boolean') {
+      return reply.code(400).send({ error: 'Field "saved" must be true or false', code: 'BAD_INPUT' })
+    }
 
     let ruleSet
     let rulesetId = null
@@ -174,12 +191,14 @@ export default async function autoreplyRoutes(fastify) {
       const result = validateRuleSet(text)
       if (!result.ok) return invalid(reply, result.errors)
       ruleSet = result.ruleSet
+      if (usesModel(ruleSet) && !isSession(request)) return refuse(reply, MODEL_REFUSAL)
     } else if (body.ruleset_id) {
       const row = getRuleSet(body.ruleset_id)
       if (!row) return notFound(reply)
       const result = validateRuleSet(row.template)
       if (!result.ok) return invalid(reply, result.errors)
       ruleSet = result.ruleSet
+      if (usesModel(ruleSet) && !isSession(request)) return refuse(reply, MODEL_REFUSAL)
       rulesetId = row.id
     } else {
       return reply.code(400).send({ error: 'Send "template" or "ruleset_id"', code: 'BAD_INPUT' })
@@ -187,8 +206,14 @@ export default async function autoreplyRoutes(fastify) {
 
     const nowMs = Date.now()
     const aliases = expandJids(chatJid)
-    const senderName = typeof body.sender_name === 'string' ? body.sender_name : null
-    const message = { type, text: body.text, chatAliases: aliases, senderName }
+    // The address book decides who counts as saved, as it does for a real
+    // message. "saved" and "sender_name" let the owner try the other case.
+    // A token sees no saved names: only the console reads the address book.
+    const sender = senderIdentity(chatJid)
+    const senderSaved = body.saved ?? sender.senderSaved
+    const ownName = typeof body.sender_name === 'string' ? body.sender_name : null
+    const senderName = senderSaved ? (ownName ?? (isSession(request) ? sender.senderName : null)) : null
+    const message = { type, text: body.text, chatAliases: aliases, senderName, senderSaved }
 
     const scopeReason = scopeRefusal(ruleSet.scope, {
       chatJid, aliases, allowlisted: isAllowlisted(aliases), isOwn: isOwnJid(chatJid),
@@ -204,18 +229,36 @@ export default async function autoreplyRoutes(fastify) {
         limits: getServerLimits().limits,
       })
 
+    let generated = false
+    if (decision.action === 'reply' && decision.generate) {
+      const written = await writeGeneratedReply({ decision, ruleSet, message, chatAliases: aliases, messageId: null, nowMs })
+      generated = written.generated
+      decision.reason = written.reason
+      decision.text = written.text
+      if (!written.text) decision.action = 'skip'
+    }
+
+    reply.header('Cache-Control', 'no-store')
     return {
       chat: chatJid,
       in_scope: !scopeReason,
       scope_reason: scopeReason,
+      sender_saved: senderSaved,
       match: rule
-        ? { rule_id: rule.id, reply: renderResponse(rule.response, { senderName, nowMs, timezone: ruleSet.options.timezone }) }
+        ? {
+          rule_id: rule.id,
+          response_type: rule.response.type,
+          reply: rule.response.type === 'text'
+            ? renderResponse(rule.response, { senderName, senderSaved, nowMs, timezone: ruleSet.options.timezone })
+            : null,
+        }
         : null,
       decision: {
         action: decision.action === 'reply' ? 'would_send' : 'skip',
         reason: decision.reason,
         rule_id: decision.rule?.id ?? null,
         reply: decision.text,
+        generated,
       },
     }
   })

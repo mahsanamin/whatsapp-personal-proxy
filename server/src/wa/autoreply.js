@@ -1,13 +1,14 @@
 import { generateMessageIDV2 } from '@whiskeysockets/baileys'
 import pino from 'pino'
 import { config } from '../config.js'
-import { expandJids, canonicalJid, resolveNames } from '../db/lidmap.js'
+import { expandJids, canonicalJid, savedContactName } from '../db/lidmap.js'
 import {
   isEnabled, loadActiveRuleSet, isAllowlisted, claimMessage, recordManualReply,
   isBotReply, logDecision, contactSnapshot, saveContact, prune, getServerLimits,
-  recordDecryptFailure, wasDecryptFailure, pruneDecryptFailures,
+  recordDecryptFailure, wasDecryptFailure, pruneDecryptFailures, recentMessages, ownMessageIdsSince,
 } from '../db/autoreply.js'
 import { decide, liveMessageRefusal, answerRefusal, isDecryptFailure, isManualReply, scopeRefusal } from '../util/autoreply.js'
+import { writeLlmReply } from '../util/autoreplyLlm.js'
 import { ensureConnected, isOwnJid, recordSentMessage, toNumber, unwrapMessage } from './client.js'
 import { sendMessage } from './send.js'
 
@@ -42,6 +43,40 @@ export function noteDecryptFailure(raw) {
   } catch (err) {
     logger.warn({ err: err?.message, id: raw?.key?.id }, 'could not record decrypt failure')
   }
+}
+
+/**
+ * The sender as a rule sees them: the address-book name, and whether they are
+ * saved at all. A profile name (pushName) is the sender's own choice and is
+ * never used, so a reply to an unknown number cannot name them.
+ */
+export function senderIdentity(senderJid) {
+  const name = savedContactName(senderJid)
+  return { senderName: name, senderSaved: Boolean(name) }
+}
+
+/**
+ * Fill in the text of a reply decision from an "llm" rule. Called only after
+ * every gate and limit has passed. Returns { text, reason, generated }; text
+ * null means nothing may be sent. Logs the reason, never the key or the text.
+ */
+export async function writeGeneratedReply({ decision, ruleSet, message, chatAliases, messageId, nowMs }) {
+  const response = decision.rule.response
+  const result = await writeLlmReply({
+    response,
+    status: decision.generate.status,
+    fallbackText: decision.generate.fallbackText,
+    nowMs,
+    timezone: ruleSet.options.timezone,
+    senderName: message.senderSaved ? message.senderName : null,
+    history: response.context_messages > 0
+      ? recentMessages({ chatAliases, excludeId: messageId, limit: response.context_messages })
+      : [],
+    incoming: { type: message.type, text: message.text },
+    gateway: config.llmGateway,
+  })
+  if (!result.generated) logger.warn({ rule: decision.rule.id, reason: result.reason }, 'auto-reply model reply not used')
+  return result
 }
 
 // One message at a time, so a burst from one chat cannot read the limits
@@ -113,15 +148,16 @@ async function handle(raw, normalized, upsertType, receivedAtMs) {
   }
 
   const action = row.mode === 'live' ? 'sent' : 'dry_run'
-  const senderName = resolveNames([normalized.from_jid]).get(normalized.from_jid) || null
+  const sender = senderIdentity(normalized.from_jid)
   const snapshot = contactSnapshot({
     ruleSet, rulesetId: row.id, chatJid, senderJid: normalized.from_jid, text: normalized.body, action, nowMs,
   })
   saveContact(snapshot.contactKey, snapshot.contactUpdate, nowMs)
 
+  const message = { type: normalized.type, text: normalized.body, chatAliases: aliases, ...sender }
   const decision = decide({
     ruleSet,
-    message: { type: normalized.type, text: normalized.body, chatAliases: aliases, senderName },
+    message,
     nowMs,
     stats: snapshot.stats,
     limits,
@@ -143,6 +179,23 @@ async function handle(raw, normalized, upsertType, receivedAtMs) {
   if (decision.action === 'skip') {
     logDecision({ ...base, action: 'skipped', reason: decision.reason })
     return
+  }
+  if (decision.generate) {
+    // Dry runs write the text too, so the log shows what live would send.
+    const written = await writeGeneratedReply({ decision, ruleSet, message, chatAliases: aliases, messageId: normalized.id, nowMs })
+    if (!written.text) {
+      logDecision({ ...base, action: 'skipped', reason: written.reason })
+      return
+    }
+    decision.text = written.text
+    decision.reason = written.reason
+    // The model took a while. Limits read "at", so log the time of the send,
+    // and if the owner wrote here by hand meanwhile, they have taken over.
+    base.at = Date.now()
+    if (ownerWroteSince(aliases, receivedAtMs)) {
+      logDecision({ ...base, action: 'skipped', reason: 'manual_reply_pause', reply_text: decision.text })
+      return
+    }
   }
   if (row.mode !== 'live') {
     logDecision({ ...base, action: 'dry_run', reason: decision.reason, reply_text: decision.text })
@@ -172,6 +225,16 @@ async function handle(raw, normalized, upsertType, receivedAtMs) {
   } catch (err) {
     logDecision({ ...base, action: 'failed', reason: `send_failed: ${String(err?.message || err).slice(0, 200)}`, reply_text: decision.text })
   }
+}
+
+/**
+ * Whether the owner sent something in this chat by hand since a time. The
+ * owner's messages are stored at ingestion, before the queue reaches them, so
+ * this sees a takeover that happened while a model reply was being written.
+ */
+function ownerWroteSince(aliases, sinceMs) {
+  return ownMessageIdsSince({ chatAliases: aliases, sinceMs })
+    .some(id => !botMessageIds.has(id) && !isBotReply(id))
 }
 
 /**
