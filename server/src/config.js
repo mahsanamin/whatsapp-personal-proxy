@@ -79,4 +79,7 @@ export const config = {
     apiKey: (process.env.LLM_GATEWAY_API_KEY || '').trim(),
     timeoutMs: Math.min(30, Math.max(3, parseInt(process.env.LLM_GATEWAY_TIMEOUT_S || '15', 10) || 15)) * 1000,
   },
+  // The phone owner's name. A model reply may use it, and says the owner will
+  // answer in person when asked something it must not share.
+  ownerName: (process.env.OWNER_NAME || '').trim().slice(0, 60) || null,
 }

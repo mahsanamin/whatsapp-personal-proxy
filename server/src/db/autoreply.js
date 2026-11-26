@@ -8,6 +8,7 @@ import {
   validateRuleSet, HANDOFF_RULE_ID, conversationStart, nextLoopStreak, textHash,
 } from '../util/autoreply.js'
 import { LIMIT_FIELDS, mergeLimits } from '../util/autoreplyLimits.js'
+import { nameTokens } from '../util/autoreplyGuard.js'
 
 const HOUR_MS = 60 * 60 * 1000
 const KEEP_DECISIONS_MS = 30 * 24 * HOUR_MS
@@ -254,6 +255,38 @@ export function recentMessages({ chatAliases, excludeId, limit }) {
     type: r.type,
     text: r.body,
   }))
+}
+
+// ─── Saved names, for the model-reply guard ──────────────────────────
+
+const NAME_CACHE_MS = 10 * 60 * 1000
+let nameCache = { at: -Infinity, tokens: new Set() }
+
+/**
+ * The name tokens of every contact in the address book (name_rank 3 and up).
+ * Rebuilt at most every ten minutes rather than per message: a contact saved
+ * a moment ago is a smaller risk than a slow reply path.
+ */
+export function savedNameTokens(nowMs = Date.now()) {
+  if (nowMs - nameCache.at < NAME_CACHE_MS) return nameCache.tokens
+  const names = db.prepare('SELECT DISTINCT display_name FROM channel_meta WHERE name_rank >= 3 AND display_name IS NOT NULL')
+    .all().map(r => r.display_name)
+  nameCache = { at: nowMs, tokens: nameTokens(names) }
+  return nameCache.tokens
+}
+
+/** Drop the cached name tokens, so the next read rebuilds them. */
+export function forgetSavedNameTokens() {
+  nameCache = { at: -Infinity, tokens: new Set() }
+}
+
+/** Every address-book name saved against these addresses. */
+export function savedNamesFor(aliases) {
+  if (!aliases.length) return []
+  return db.prepare(`
+    SELECT DISTINCT display_name FROM channel_meta
+    WHERE jid IN (${placeholders(aliases)}) AND name_rank >= 3 AND display_name IS NOT NULL
+  `).all(...aliases).map(r => r.display_name)
 }
 
 /** Ids of the owner's messages in a chat (all its aliases) sent after a time. */

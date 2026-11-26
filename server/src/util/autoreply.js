@@ -146,9 +146,30 @@ export function validateRuleSet(input) {
     seen.add(id)
   }
 
+  // Rule indexes only line up when every rule validated.
+  if (!errors.length) llmGroupErrors({ scope, rules, fallback }, fail)
+
   if (errors.length) return { ok: false, errors, warnings: [], ruleSet: null }
   const ruleSet = { format: FORMAT_VERSION, name, version, description, scope, options, rules, fallback }
   return { ok: true, errors: [], warnings: ruleSetWarnings(ruleSet), ruleSet }
+}
+
+/**
+ * A model reply is for direct chats only: in a group the history would carry
+ * other members' words, and the reply would be read by all of them. A rule
+ * reaches the groups in its own match.chats, or, with none listed, every
+ * group in scope.chats.
+ */
+function llmGroupErrors({ scope, rules, fallback }, fail) {
+  const check = (rule, path) => {
+    if (rule.response?.type !== 'llm') return
+    const reach = rule.match?.chats?.length ? rule.match.chats : scope.chats
+    if (reach.some(jid => jid.endsWith('@g.us'))) {
+      fail(`${path}.response`, 'A model-written reply is for direct chats only. List only direct chats in this rule\'s match.chats, or take the groups out of scope.chats')
+    }
+  }
+  rules.forEach((rule, i) => check(rule, `rules[${i}]`))
+  if (fallback) check(fallback, 'fallback')
 }
 
 const usesName = (text) => typeof text === 'string' && NAME_PLACEHOLDERS.some(key => text.includes(`{${key}}`))
