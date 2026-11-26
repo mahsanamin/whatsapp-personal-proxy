@@ -204,6 +204,48 @@ wpp whitelist remove +971501234567 --yes
 
 `list` needs `others:whitelist:read`; `add`/`remove` need `others:whitelist:manage`.
 
+## Auto-reply rule sets
+
+Edit a rule set as a JSON file and push it from the command line. The format is in
+[`autoreply.md`](autoreply.md). Everything here needs `autoreply:manage`.
+
+```bash
+wpp autoreply list
+wpp autoreply get "Office hours"                  # id or exact name
+wpp autoreply download "Office hours" --out office-hours.json
+wpp autoreply validate office-hours.json          # errors and warnings, nothing saved
+wpp autoreply update "Office hours" office-hours.json --yes
+wpp autoreply upload new-set.json --yes           # starts inactive, in dry-run
+wpp autoreply activate "New set" --yes            # active, still dry-run
+wpp autoreply test "New set" --chat +971501234567 --text "are you open?"
+wpp autoreply decisions --limit 20 --ruleset "New set"
+wpp autoreply contacts
+wpp autoreply mute +971501234567 --minutes 120 --yes
+```
+
+- A rule set can be named by its id or its exact name. If two sets share the name, the
+  command stops with `AMBIGUOUS` and lists their ids.
+- The file is read as UTF-8 JSON and sent as an object, so a broken file fails locally
+  with `BAD_TEMPLATE_FILE` before anything reaches the server.
+- `update` validates first and refuses with `INVALID_TEMPLATE` (the errors and warnings
+  are in `error.details`). **Updating a live rule set puts it back in dry-run**, so it
+  sends nothing until you put it live again in the web console. The output says so in
+  `data.notice` when that happened.
+- `upload`, `update`, `activate` and `mute` ask first; pass `--yes` when scripting.
+- `download` will not overwrite an existing file unless you pass `--force`.
+- `test` sends and logs nothing. Add `--saved`/`--unsaved` and `--sender-name` to try
+  the other kind of sender.
+- Nothing here can put a rule set live, turn on the global switch, or unmute a contact.
+  Those stay in the web console.
+
+**Rule sets with a model-written reply** (`"type": "llm"`) need a key that has
+`autoreply:llm` as well as `autoreply:manage` to upload, update, activate or test.
+Create that key in the web console under **API Keys**. Without it these commands fail
+with `MISSING_SCOPE`, and `decisions` shows model-written replies with `reply_text: null`.
+`validate` works without it. The model reads the recent messages of the chat it is
+answering, so a key with `autoreply:llm` can see what is said in any chat. Give it only
+to a machine you would also trust with `channels:read`.
+
 ## Watching
 
 ```bash
@@ -245,6 +287,8 @@ Use `--pretty` before the subcommand for indented JSON. Stable error codes worth
 | `MISSING_SCOPE` | The token lacks the scope this call needs |
 | `WA_DISCONNECTED` | WhatsApp is not linked; scan the QR code in the console |
 | `CONFIRMATION_REQUIRED` | A write was attempted non-interactively without `--yes` |
+| `INVALID_TEMPLATE` | The rule set file failed validation; `error.details` has `errors` and `warnings` |
+| `AMBIGUOUS` | More than one rule set has that name; `error.details.candidates` lists them |
 
 ## Escape hatch
 

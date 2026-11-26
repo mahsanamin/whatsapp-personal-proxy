@@ -1187,13 +1187,21 @@ export function usesModel(ruleSet) {
 /**
  * A model reply is written from the chat's recent messages, and the text ends
  * up in the test result and the decision log. An API key with autoreply:manage
- * must not be able to read chats that way (that is what channels:read is
- * for), so rule sets with model replies are console only.
+ * alone must not be able to read chats that way (that is what channels:read is
+ * for), so rule sets with model replies need the console or a key that was
+ * also given autoreply:llm on purpose.
  */
+export const MODEL_SCOPE = 'autoreply:llm'
+
 export const MODEL_REFUSAL = {
   status: 403,
-  error: 'Only the web console can manage rule sets whose replies a model writes',
+  error: `Rule sets whose replies a model writes need the ${MODEL_SCOPE} scope or the web console`,
   code: 'MISSING_SCOPE',
+}
+
+/** The console, or a token holding autoreply:llm. */
+export function mayUseModel({ isSession, scopes }) {
+  return Boolean(isSession) || (Array.isArray(scopes) && scopes.includes(MODEL_SCOPE))
 }
 
 /**

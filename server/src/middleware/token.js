@@ -12,6 +12,7 @@ const VALID_SCOPES = [
   'tabs:manage',
   'wa:admin',
   'autoreply:manage',
+  'autoreply:llm',
 ]
 
 export { VALID_SCOPES }

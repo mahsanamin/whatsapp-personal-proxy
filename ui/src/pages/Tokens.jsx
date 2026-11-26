@@ -9,7 +9,7 @@ const SCOPE_GROUPS = {
   'Chats & Messages': ['channels:read', 'channels:summarize'],
   Tabs: ['tabs:manage'],
   Admin: ['wa:admin'],
-  'Auto-reply': ['autoreply:manage'],
+  'Auto-reply': ['autoreply:manage', 'autoreply:llm'],
 }
 
 const SCOPE_LABELS = {
@@ -23,6 +23,7 @@ const SCOPE_LABELS = {
   'tabs:manage': 'Manage tabs',
   'wa:admin': 'Manage WhatsApp connection',
   'autoreply:manage': 'Manage auto-reply rule sets (never live)',
+  'autoreply:llm': 'Manage AI-written auto-replies (reads chats)',
 }
 
 export default function Tokens() {
@@ -188,6 +189,17 @@ export default function Tokens() {
                   </div>
                 </div>
               ))}
+              {scopes.includes('autoreply:llm') && (
+                <p className="text-xs text-amber-300 bg-amber-950/30 border border-amber-900/40 rounded-lg px-3 py-2">
+                  With this and "Manage auto-reply rule sets", the key can upload and test rule sets whose
+                  replies a model writes. The model reads the recent messages of the chat it answers, so the
+                  key can see what is said in any chat through test results and the decision log. Only give it
+                  to a machine you would trust with "Read all chats". It still cannot put a rule set live.
+                </p>
+              )}
+              {scopes.includes('autoreply:llm') && !scopes.includes('autoreply:manage') && (
+                <p className="text-xs text-neutral-400">"autoreply:llm" does nothing without "autoreply:manage".</p>
+              )}
             </div>
 
             <button

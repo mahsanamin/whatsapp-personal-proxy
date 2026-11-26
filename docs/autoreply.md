@@ -27,10 +27,14 @@ back into `dry_run`**, so a change is always seen in the log before it sends.
 Only the web console can turn the global switch on or put a rule set live. An API key
 with `autoreply:manage` can create, edit, test and activate rule sets in `dry_run`, but
 it can never make the server send. That keeps API keys limited to the people their send
-scopes already allow. Rule sets with a model-written reply (`"type": "llm"`) are console
-only as well, to create, edit, activate and test: the model is shown recent messages of
-the chat, so a key that could steer it could read chats it has no scope for. A key also
-never sees saved contact names in a test result.
+scopes already allow. Rule sets with a model-written reply (`"type": "llm"`) need more:
+the model is shown recent messages of the chat, so a key that could steer it could read
+chats it has no scope for. Creating, editing, activating and testing them takes the
+console, or a key that has `autoreply:llm` as well as `autoreply:manage`. Give a key
+`autoreply:llm` only where you would give it `channels:read`. Without it, the decision
+log hides the text of replies a model may have written (`reply_redacted: true`). Even
+with it, a key cannot put a rule set live. A key also never sees saved contact names in
+a test result.
 
 The safe way to start: upload a rule set, activate it in dry run, turn the global switch
 on, watch the decision log for a while, then switch the rule set to live.

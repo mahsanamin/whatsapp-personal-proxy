@@ -149,7 +149,7 @@ def api_call(profile, method, path, params=None, body=None, auth=True):
             server = json.loads(raw)
             message = server.get("error") or "Server returned HTTP %s" % exc.code
             code = server.get("code") or "HTTP_ERROR"
-            details = None
+            details = server.get("details")
         except ValueError:
             message, code, details = "Server returned HTTP %s" % exc.code, "HTTP_ERROR", {"body": raw[:500]}
         raise WppError(message, code, status=exc.code, details=details)
@@ -637,6 +637,158 @@ def do_watch(args, profile, pretty):
 # ─── Read commands ─────────────────────────────────────────────────────────
 
 
+# ─── Auto-reply ────────────────────────────────────────────────────────────
+
+LIVE_NOTE = ("Editing a rule set takes a live one back to dry-run. "
+             "Only the web console can put it live again.")
+
+
+def read_template_file(file_path):
+    """Parse a rule set file as UTF-8 JSON, so the server gets an object."""
+    path = Path(file_path).expanduser()
+    try:
+        raw = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        raise WppError("File not found: %s" % file_path, "FILE_NOT_FOUND")
+    except UnicodeDecodeError as exc:
+        raise WppError("%s is not UTF-8 text: %s" % (file_path, exc), "BAD_TEMPLATE_FILE")
+    try:
+        return json.loads(raw)
+    except ValueError as exc:
+        raise WppError("%s is not valid JSON: %s" % (file_path, exc), "BAD_TEMPLATE_FILE")
+
+
+def resolve_ruleset(profile, ref):
+    """A rule set id, or its exact name when only one set has it."""
+    rows = api_call(profile, "GET", "/api/autoreply/rulesets")
+    for row in rows:
+        if row.get("id") == ref:
+            return row
+    named = [row for row in rows if row.get("name") == ref]
+    if len(named) == 1:
+        return named[0]
+    if named:
+        raise WppError(
+            "%d rule sets are named %r; use the id" % (len(named), ref), "AMBIGUOUS",
+            details={"candidates": [{"id": r["id"], "name": r["name"], "mode": r.get("mode"),
+                                     "active": r.get("active")} for r in named]},
+        )
+    raise WppError("No rule set with id or name %r" % ref, "NOT_FOUND")
+
+
+def validate_template(profile, template):
+    result = api_call(profile, "POST", "/api/autoreply/validate", body={"template": template})
+    if not result.get("valid"):
+        errors = result.get("errors") or []
+        first = errors[0] if errors else {}
+        where = "%s: " % first["path"] if first.get("path") else ""
+        raise WppError(
+            "Template is not valid: %s%s" % (where, first.get("message", "unknown error")),
+            "INVALID_TEMPLATE",
+            details={"errors": errors, "warnings": result.get("warnings") or []},
+        )
+    return result
+
+
+def without_template(row):
+    return {key: value for key, value in row.items() if key != "template"}
+
+
+def ruleset_path(row, suffix=""):
+    return "/api/autoreply/rulesets/%s%s" % (parse.quote(row["id"], safe=""), suffix)
+
+
+def do_autoreply(args, profile):
+    action = args.autoreply_action
+
+    if action == "list":
+        rows = api_call(profile, "GET", "/api/autoreply/rulesets")
+        return ok({"rulesets": rows}, meta={"count": len(rows)})
+
+    if action == "get":
+        row = api_call(profile, "GET", ruleset_path(resolve_ruleset(profile, args.ruleset)))
+        try:
+            row["template"] = json.loads(row["template"])
+        except (TypeError, ValueError):
+            pass  # an invalid stored template is shown as the text it is
+        return ok(row)
+
+    if action == "download":
+        row = api_call(profile, "GET", ruleset_path(resolve_ruleset(profile, args.ruleset)))
+        slug = re.sub(r"[^a-z0-9]+", "-", row["name"].lower()).strip("-") or "rule-set"
+        out = Path(args.out or "%s.json" % slug).expanduser()
+        # Downloading over a file being edited would lose the edit.
+        if out.exists() and not args.force:
+            raise WppError("%s already exists; pass --force to overwrite it" % out, "FILE_EXISTS")
+        text = row["template"]
+        out.write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
+        return ok({"id": row["id"], "name": row["name"], "saved": str(out)})
+
+    if action == "validate":
+        return ok(validate_template(profile, read_template_file(args.file)))
+
+    if action == "upload":
+        template = read_template_file(args.file)
+        summary = validate_template(profile, template)["summary"]
+        require_confirmation(args, "Upload rule set %r? It starts inactive, in dry-run." % summary["name"])
+        row = api_call(profile, "POST", "/api/autoreply/rulesets", body={"template": template})
+        return ok(without_template(row), meta={
+            "note": "Inactive, in dry-run. Activate it with: wpp autoreply activate %s" % row["id"],
+        })
+
+    if action == "update":
+        current = resolve_ruleset(profile, args.ruleset)
+        template = read_template_file(args.file)
+        validated = validate_template(profile, template)
+        was_live = current.get("mode") == "live"
+        prompt = "Replace the template of %r (%s)?" % (current["name"], current["id"])
+        if was_live:
+            prompt += " It is live now and will drop to dry-run."
+        require_confirmation(args, prompt)
+        row = api_call(profile, "PUT", ruleset_path(current), body={"template": template})
+        data = {"ruleset": without_template(row), "was_live": was_live, "warnings": validated.get("warnings") or []}
+        if was_live:
+            data["notice"] = ("This rule set was live and is now in dry-run, so it sends nothing. "
+                              "Put it live again in the web console.")
+        return ok(data, meta={"note": LIVE_NOTE})
+
+    if action == "activate":
+        current = resolve_ruleset(profile, args.ruleset)
+        require_confirmation(args, "Activate %r in dry-run? Any other active rule set is deactivated." % current["name"])
+        row = api_call(profile, "PATCH", ruleset_path(current), body={"active": True, "mode": "dry_run"})
+        return ok(without_template(row), meta={
+            "note": "Active in dry-run: replies are logged, not sent. Only the web console can put it live.",
+        })
+
+    if action == "test":
+        current = resolve_ruleset(profile, args.ruleset)
+        body = {"ruleset_id": current["id"], "chat": args.chat, "text": args.text}
+        if args.type:
+            body["type"] = args.type
+        if args.saved is not None:
+            body["saved"] = args.saved
+        if args.sender_name:
+            body["sender_name"] = args.sender_name
+        return ok(api_call(profile, "POST", "/api/autoreply/test", body=body),
+                  meta={"note": "Simulated: nothing was sent or logged."})
+
+    if action == "decisions":
+        ruleset_id = resolve_ruleset(profile, args.ruleset)["id"] if args.ruleset else None
+        rows = api_call(profile, "GET", "/api/autoreply/decisions", {"limit": args.limit, "ruleset_id": ruleset_id})
+        return ok({"decisions": rows}, meta={"count": len(rows)})
+
+    if action == "contacts":
+        rows = api_call(profile, "GET", "/api/autoreply/contacts")
+        return ok({"contacts": rows}, meta={"count": len(rows)})
+
+    if action == "mute":
+        require_confirmation(args, "Stop auto-replies to %s for %d minutes?" % (args.jid, args.minutes))
+        return ok(api_call(profile, "POST", "/api/autoreply/contacts/%s/mute" % parse.quote(args.jid, safe=""),
+                           body={"minutes": args.minutes}))
+
+    raise WppError("Unknown autoreply action", "BAD_COMMAND")
+
+
 def run_api_command(args, profile, pretty):
     command = args.command
 
@@ -864,6 +1016,9 @@ def run_api_command(args, profile, pretty):
     if command == "watch":
         return do_watch(args, profile, pretty)
 
+    if command == "autoreply":
+        return do_autoreply(args, profile)
+
     if command == "request":
         method = args.method.upper()
         body = None
@@ -1063,6 +1218,47 @@ def build_parser():
     p.add_argument("--chat", help="Only this chat")
     p.add_argument("--type", help="Only this message type")
     p.add_argument("--count", type=int, default=0, help="Stop after N messages (0 = forever)")
+
+    p = sub.add_parser("autoreply", help="Manage auto-reply rule sets (never puts one live)")
+    ar = p.add_subparsers(dest="autoreply_action", required=True)
+    ar.add_parser("list", help="List rule sets, without templates")
+    x = ar.add_parser("get", help="Show one rule set with its template")
+    x.add_argument("ruleset", help="Rule set id or exact name")
+    x = ar.add_parser("download", help="Save a rule set's template to a JSON file")
+    x.add_argument("ruleset", help="Rule set id or exact name")
+    x.add_argument("--out", help="File to write (default: <name>.json)")
+    x.add_argument("--force", action="store_true", help="Overwrite an existing file")
+    x = ar.add_parser("validate", help="Check a template file; prints errors and warnings")
+    x.add_argument("file")
+    x = ar.add_parser("upload", help="Create a rule set from a file (inactive, dry-run)")
+    x.add_argument("file")
+    x.add_argument("--yes", action="store_true")
+    x = ar.add_parser("update", help="Replace a rule set's template from a file (a live set drops to dry-run)")
+    x.add_argument("ruleset", help="Rule set id or exact name")
+    x.add_argument("file")
+    x.add_argument("--yes", action="store_true")
+    x = ar.add_parser("activate", help="Make a rule set the active one, in dry-run")
+    x.add_argument("ruleset", help="Rule set id or exact name")
+    x.add_argument("--yes", action="store_true")
+    x = ar.add_parser("test", help="Simulate an incoming message; sends and logs nothing")
+    x.add_argument("ruleset", help="Rule set id or exact name")
+    x.add_argument("--chat", required=True, help="Number or JID the message comes from")
+    x.add_argument("--text", required=True, help="The incoming message text")
+    x.add_argument("--type", help="Message type (default: text)")
+    saved = x.add_mutually_exclusive_group()
+    saved.add_argument("--saved", dest="saved", action="store_const", const=True, default=None,
+                       help="Treat the sender as a saved contact")
+    saved.add_argument("--unsaved", dest="saved", action="store_const", const=False,
+                       help="Treat the sender as not saved")
+    x.add_argument("--sender-name", help="Saved name to use with --saved")
+    x = ar.add_parser("decisions", help="Read the decision log, newest first")
+    x.add_argument("--limit", type=bounded_int(1, 500), default=50)
+    x.add_argument("--ruleset", help="Only this rule set (id or exact name)")
+    ar.add_parser("contacts", help="Per-contact reply counts and mutes")
+    x = ar.add_parser("mute", help="Stop auto-replies to a contact for a while")
+    x.add_argument("jid", help="Number or chat JID")
+    x.add_argument("--minutes", type=bounded_int(1, 525600), default=1440)
+    x.add_argument("--yes", action="store_true")
 
     p = sub.add_parser("request", help="Advanced raw API request")
     p.add_argument("method")

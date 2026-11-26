@@ -6,7 +6,7 @@ import { isOwnJid } from '../wa/client.js'
 import { senderIdentity, writeGeneratedReply } from '../wa/autoreply.js'
 import {
   MODES, MESSAGE_TYPES, validateRuleSet, findMatchingRule, renderResponse, scopeRefusal,
-  decide, stateChangeRefusal, usesModel, MODEL_REFUSAL,
+  decide, stateChangeRefusal, usesModel, mayUseModel, MODEL_REFUSAL,
 } from '../util/autoreply.js'
 import {
   isEnabled, setEnabled, listRuleSets, getRuleSet, createRuleSet, updateRuleSet,
@@ -40,6 +40,7 @@ function settings() {
 }
 
 const isSession = (request) => Boolean(request.session?.authenticated)
+const modelAllowed = (request) => mayUseModel({ isSession: isSession(request), scopes: request.token?.scopes })
 const refuse = (reply, refusal) => reply.code(refusal.status).send({ error: refusal.error, code: refusal.code })
 
 const notFound = (reply) => reply.code(404).send({ error: 'Rule set not found', code: 'NOT_FOUND' })
@@ -80,7 +81,7 @@ export default async function autoreplyRoutes(fastify) {
     }
     const { ok, errors, ruleSet } = validateRuleSet(text)
     if (!ok) return invalid(reply, errors)
-    if (usesModel(ruleSet) && !isSession(request)) return refuse(reply, MODEL_REFUSAL)
+    if (usesModel(ruleSet) && !modelAllowed(request)) return refuse(reply, MODEL_REFUSAL)
     return reply.code(201).send(createRuleSet(text, ruleSet))
   })
 
@@ -106,7 +107,7 @@ export default async function autoreplyRoutes(fastify) {
     }
     const { ok, errors, ruleSet } = validateRuleSet(text)
     if (!ok) return invalid(reply, errors)
-    if (usesModel(ruleSet) && !isSession(request)) return refuse(reply, MODEL_REFUSAL)
+    if (usesModel(ruleSet) && !modelAllowed(request)) return refuse(reply, MODEL_REFUSAL)
     return updateRuleSet(request.params.id, text, ruleSet)
   })
 
@@ -136,7 +137,7 @@ export default async function autoreplyRoutes(fastify) {
     if (active === true && !checked.ok) {
       return reply.code(400).send({ error: 'Fix the template before activating it', code: 'BAD_INPUT' })
     }
-    if (active === true && usesModel(checked.ruleSet) && !isSession(request)) return refuse(reply, MODEL_REFUSAL)
+    if (active === true && usesModel(checked.ruleSet) && !modelAllowed(request)) return refuse(reply, MODEL_REFUSAL)
     return setRuleSetState(current.id, { mode, active })
   })
 
@@ -191,14 +192,14 @@ export default async function autoreplyRoutes(fastify) {
       const result = validateRuleSet(text)
       if (!result.ok) return invalid(reply, result.errors)
       ruleSet = result.ruleSet
-      if (usesModel(ruleSet) && !isSession(request)) return refuse(reply, MODEL_REFUSAL)
+      if (usesModel(ruleSet) && !modelAllowed(request)) return refuse(reply, MODEL_REFUSAL)
     } else if (body.ruleset_id) {
       const row = getRuleSet(body.ruleset_id)
       if (!row) return notFound(reply)
       const result = validateRuleSet(row.template)
       if (!result.ok) return invalid(reply, result.errors)
       ruleSet = result.ruleSet
-      if (usesModel(ruleSet) && !isSession(request)) return refuse(reply, MODEL_REFUSAL)
+      if (usesModel(ruleSet) && !modelAllowed(request)) return refuse(reply, MODEL_REFUSAL)
       rulesetId = row.id
     } else {
       return reply.code(400).send({ error: 'Send "template" or "ruleset_id"', code: 'BAD_INPUT' })
@@ -305,8 +306,25 @@ export default async function autoreplyRoutes(fastify) {
     return { ok: true }
   })
 
+  // A model-written reply is drawn from the chat it answers, so a key without
+  // autoreply:llm gets those rows without their text.
   fastify.get('/autoreply/decisions', { preHandler: manage }, async (request) => {
     const limit = parseInt(request.query?.limit || '100', 10) || 100
-    return listDecisions({ limit, rulesetId: request.query?.ruleset_id || null })
+    const rows = listDecisions({ limit, rulesetId: request.query?.ruleset_id || null })
+    if (modelAllowed(request)) return rows
+    const modelSets = new Map()
+    const writtenByModel = (row) => {
+      if (String(row.reason || '').startsWith('llm')) return true
+      if (!modelSets.has(row.ruleset_id)) {
+        const set = row.ruleset_id ? getRuleSet(row.ruleset_id) : null
+        const checked = set ? validateRuleSet(set.template) : null
+        // A deleted or broken set cannot prove its replies were plain text.
+        modelSets.set(row.ruleset_id, !checked?.ok || usesModel(checked.ruleSet))
+      }
+      return modelSets.get(row.ruleset_id)
+    }
+    return rows.map(row => (row.reply_text && writtenByModel(row)
+      ? { ...row, reply_text: null, reply_redacted: true }
+      : row))
   })
 }
