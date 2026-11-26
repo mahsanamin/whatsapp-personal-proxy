@@ -92,6 +92,7 @@ Rules whose reply a language model writes (`"type": "llm"`) call an OpenAI-compa
 | `LLM_GATEWAY_URL` | unset | Base URL ending in `/v1`. The server calls `{url}/chat/completions` |
 | `LLM_GATEWAY_API_KEY` | unset | Sent as a bearer token. Never logged |
 | `LLM_GATEWAY_TIMEOUT_S` | `15` | How long one model call may take (3 to 30). After that the rule's `fallback_text` is sent |
+| `OWNER_NAME` | unset | Your own name. The model is told it, may use it in a reply, and says you will answer in person when asked something it must not share. Unset, it says "the owner" |
 
 Without a URL and key, "llm" rules send their `fallback_text`, or nothing if they have none.
 

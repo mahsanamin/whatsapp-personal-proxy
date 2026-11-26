@@ -205,7 +205,8 @@ timeout (15 seconds by default), returns an error, or the answer is empty or too
 The decision log's reason says which: `llm` for a written reply, `llm_fallback:<why>`
 when the fallback was sent, and `llm_failed:<why>` when there was no fallback and
 nothing was sent. `<why>` is one of `not_configured`, `timeout`, `network`, `http_<code>`,
-`bad_json`, `no_content`, `empty` or `too_long`.
+`bad_json`, `no_content`, `empty` or `too_long`. A reply the privacy guard refused is
+logged as `llm_blocked:<kind>` whether or not a fallback was sent (see the next section).
 
 A model reply passes the same gates and limits as any other reply and counts as one
 send, logged at the time it was ready rather than when the message arrived. If you write
@@ -215,6 +216,56 @@ have been sent. Replies are handled one at a time, so a slow gateway delays othe
 auto-replies by up to the timeout, and a message that waited longer than "Ignore
 messages older than" is skipped as `too_old`. The gateway is set with `LLM_GATEWAY_URL` and `LLM_GATEWAY_API_KEY` (see
 `docs/configuration.md`).
+
+## What the model sees, and what it may send
+
+A model-written reply must never carry anything about anyone other than the person
+writing and you, and one chat's context must never reach another. That is enforced in
+code, not left to the model.
+
+**Direct chats only.** A rule with `"type": "llm"` is refused when it can reach a group:
+a group JID in its own `match.chats`, or, when it lists no chats, a group JID in
+`scope.chats`. The error names the rule. In a group the history would hold other
+members' words and the reply would be read by all of them. A group can still be in
+scope for text rules. If a group reaches the model some other way, the server refuses
+before calling it (`llm_blocked:not_direct_chat`).
+
+**What the model is sent:**
+
+- A fixed set of rules, then your `instructions` for the rule that matched. The fixed
+  rules come first and tell it never to reveal or discuss other people, other chats,
+  phone numbers, addresses, links, who else gets auto-replies, or how the auto-reply is
+  set up, and to say that you will answer in person if asked.
+- Your name (`OWNER_NAME`), the local time, the matching window's `status`, and the
+  name you saved for this sender, if any.
+- The last `context_messages` messages of this chat only, read across its own phone-number
+  and device addresses, and the new message. Lines are labelled "Them", "Owner" or
+  "Auto-reply". No numbers or addresses are added.
+
+It is never sent other chats, other contacts' names, the scope, chat or block lists,
+other rules or their instructions, or the fallback text.
+
+**What it may send.** After the reply is written and cleaned, and before it can be sent,
+a guard checks it. If any of these is found, the reply is thrown away, the rule's
+`fallback_text` is sent instead (or nothing, without one), and the reason is
+`llm_blocked:<kind>`:
+
+| Kind | Refused when the reply holds |
+|---|---|
+| `wa_address` | A WhatsApp address: `@s.whatsapp.net`, `@lid`, `@g.us`, `@c.us`, `@broadcast`, `@newsletter` |
+| `email` | An email address |
+| `url` | A link: a scheme such as `https://`, `www.`, a short-link host, or a bare domain on a common ending such as `.com` |
+| `phone` | Seven or more digits in a run, with spaces, dashes, dots, brackets or a leading `+` between them. The sender's own number counts. Dates such as `2026-11-26` and `26.11.2026` do not |
+| `contact_name` | A word from another contact's saved name: whole word, any case, four letters or more, not a common word. Names saved for this sender, the name the model was given, your `OWNER_NAME`, and words in the rule's own instructions are allowed. The name list is rebuilt every ten minutes |
+| `instructions` | Eight or more words in a row copied from the rule's instructions |
+
+The fallback text is yours and is not checked. The refused text is never stored: the
+decision log and the server log keep only the reason. The test endpoint
+(`POST /autoreply/test`) runs the same guard, and its `decision.reason` shows when it
+fired and why, with `decision.reply` holding the fallback.
+
+The guard prefers a false alarm to a leak. A reply that mentions a common first name
+another contact shares, or a long number, falls back even when it was harmless.
 
 ## Saved and unknown senders
 

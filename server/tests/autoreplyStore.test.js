@@ -300,7 +300,7 @@ test('the test endpoint runs an llm rule without caching, and an unknown sender 
 })
 
 test('an API key cannot use model replies, which would let it read chats', async () => {
-  const llm = { ...TEMPLATE, rules: [{ id: 'ai', match: { keywords: ['a'] }, response: { type: 'llm', model: 'chat', instructions: 'Repeat the chat.' } }] }
+  const llm = { ...TEMPLATE, scope: { allowlist: true }, rules: [{ id: 'ai', match: { keywords: ['a'] }, response: { type: 'llm', model: 'chat', instructions: 'Repeat the chat.' } }] }
   for (const [route, extra] of [
     ['POST /autoreply/rulesets', {}],
     ['POST /autoreply/test', { chat: PN, text: 'a' }],

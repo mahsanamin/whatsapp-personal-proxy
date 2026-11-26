@@ -6,6 +6,7 @@ import {
   isEnabled, loadActiveRuleSet, isAllowlisted, claimMessage, recordManualReply,
   isBotReply, logDecision, contactSnapshot, saveContact, prune, getServerLimits,
   recordDecryptFailure, wasDecryptFailure, pruneDecryptFailures, recentMessages, ownMessageIdsSince,
+  savedNameTokens, savedNamesFor,
 } from '../db/autoreply.js'
 import { decide, liveMessageRefusal, answerRefusal, isDecryptFailure, isManualReply, scopeRefusal } from '../util/autoreply.js'
 import { writeLlmReply } from '../util/autoreplyLlm.js'
@@ -59,9 +60,18 @@ export function senderIdentity(senderJid) {
  * Fill in the text of a reply decision from an "llm" rule. Called only after
  * every gate and limit has passed. Returns { text, reason, generated }; text
  * null means nothing may be sent. Logs the reason, never the key or the text.
+ *
+ * Direct chats only. The validator already refuses an "llm" rule that can
+ * reach a group; this holds even if a group gets through some other way, so
+ * a group's members and their numbers never reach a model.
  */
 export async function writeGeneratedReply({ decision, ruleSet, message, chatAliases, messageId, nowMs }) {
   const response = decision.rule.response
+  if (!chatAliases.length || chatAliases.some(jid => !/@(s\.whatsapp\.net|lid)$/.test(jid))) {
+    const fallbackText = decision.generate.fallbackText
+    logger.warn({ rule: decision.rule.id }, 'auto-reply model reply refused outside a direct chat')
+    return { text: fallbackText || null, generated: false, reason: 'llm_blocked:not_direct_chat' }
+  }
   const result = await writeLlmReply({
     response,
     status: decision.generate.status,
@@ -73,7 +83,10 @@ export async function writeGeneratedReply({ decision, ruleSet, message, chatAlia
       ? recentMessages({ chatAliases, excludeId: messageId, limit: response.context_messages })
       : [],
     incoming: { type: message.type, text: message.text },
+    ownerName: config.ownerName,
     gateway: config.llmGateway,
+    // In a direct chat the sender is the chat, so its saved names are theirs.
+    guard: { contactNames: savedNameTokens(nowMs), allowedNames: savedNamesFor(chatAliases) },
   })
   if (!result.generated) logger.warn({ rule: decision.rule.id, reason: result.reason }, 'auto-reply model reply not used')
   return result
